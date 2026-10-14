@@ -10,6 +10,7 @@ from arq.worker import Retry
 from docdrift_api.config import Settings
 from docdrift_api.models import RunStatus
 from docdrift_worker import worker
+from docdrift_worker.github import GitHubPublicationError
 
 
 class FakeTransaction:
@@ -23,6 +24,7 @@ class FakeTransaction:
 class FakeSession:
     def __init__(self, run: SimpleNamespace | None) -> None:
         self.run = run
+        self.findings: list[object] = []
         self.flush_count = 0
         self.fail_flush_at: int | None = None
 
@@ -108,26 +110,51 @@ class WorkerTests(unittest.IsolatedAsyncioTestCase):
 
     async def test_worker_reports_state_returned_by_analysis_pipeline(self) -> None:
         factory = FakeSessionFactory(make_run())
-        with patch.object(
-            worker, "run_analysis_pipeline", new=AsyncMock(return_value=RunStatus.COMPLETED.value)
-        ) as analyze:
+        with (
+            patch.object(
+                worker,
+                "run_analysis_pipeline",
+                new=AsyncMock(return_value=RunStatus.COMPLETED.value),
+            ) as analyze,
+            patch.object(
+                worker, "publish_completed_run", new=AsyncMock(return_value="published")
+            ) as publish,
+        ):
             result = await worker.process_run({"session_factory": factory}, 5)
 
-        self.assertEqual(result, {"run_id": 5, "state": RunStatus.COMPLETED.value})
+        self.assertEqual(
+            result,
+            {"run_id": 5, "state": RunStatus.COMPLETED.value, "publication": "published"},
+        )
         analyze.assert_awaited_once_with(factory, 5, checkout_component=None)
+        publish.assert_awaited_once()
 
     async def test_missing_run_is_a_safe_no_op(self) -> None:
         self.assertEqual(
             await worker.process_run({"session_factory": FakeSessionFactory(None)}, 999),  # type: ignore[arg-type]
-            {"run_id": 999, "state": "missing"},
+            {"run_id": 999, "state": "missing", "publication": "not_attempted"},
         )
 
     async def test_terminal_state_is_not_reanalyzed_or_overwritten(self) -> None:
         for status in (RunStatus.COMPLETED, RunStatus.FAILED):
             with self.subTest(status=status):
                 factory = FakeSessionFactory(make_run(status))
-                result = await worker.process_run({"session_factory": factory}, 5)
-                self.assertEqual(result, {"run_id": 5, "state": status.value})
+                with patch.object(
+                    worker,
+                    "publish_completed_run",
+                    new=AsyncMock(return_value="failed"),
+                ):
+                    result = await worker.process_run({"session_factory": factory}, 5)
+                self.assertEqual(
+                    result,
+                    {
+                        "run_id": 5,
+                        "state": status.value,
+                        "publication": "failed"
+                        if status == RunStatus.COMPLETED
+                        else "not_attempted",
+                    },
+                )
                 self.assertEqual(factory.session.run.status, status)
 
     async def test_transient_failure_retries_then_marks_active_run_failed(self) -> None:
@@ -160,6 +187,56 @@ class WorkerTests(unittest.IsolatedAsyncioTestCase):
         ):
             await worker.process_run({"session_factory": factory}, 5)
         mark_failed.assert_awaited_once_with(factory, 5)
+
+    async def test_publication_retry_never_marks_successful_analysis_failed(self) -> None:
+        run = make_run(RunStatus.COMPLETED)
+        factory = FakeSessionFactory(run)
+        with (
+            patch.object(
+                worker,
+                "run_analysis_pipeline",
+                new=AsyncMock(return_value=RunStatus.COMPLETED.value),
+            ),
+            patch.object(
+                worker,
+                "publish_completed_run",
+                side_effect=GitHubPublicationError(
+                    "GitHub unavailable", transient=True, retry_after_seconds=42
+                ),
+            ),
+            patch.object(worker, "_mark_failed_if_active", new=AsyncMock()) as mark_failed,
+            self.assertRaises(Retry) as raised,
+        ):
+            await worker.process_run({"session_factory": factory, "job_try": 1}, 5)
+        self.assertEqual(raised.exception.defer_score, 42_000)
+        mark_failed.assert_not_awaited()
+        self.assertEqual(run.status, RunStatus.COMPLETED)
+
+    async def test_permanent_publication_failure_returns_completed_analysis(self) -> None:
+        run = make_run(RunStatus.COMPLETED)
+        factory = FakeSessionFactory(run)
+        persisted_findings = [object()]
+        factory.session.findings = persisted_findings
+        with (
+            patch.object(
+                worker,
+                "run_analysis_pipeline",
+                new=AsyncMock(return_value=RunStatus.COMPLETED.value),
+            ),
+            patch.object(
+                worker,
+                "publish_completed_run",
+                new=AsyncMock(return_value="failed"),
+            ) as publish,
+        ):
+            result = await worker.process_run({"session_factory": factory}, 5)
+        self.assertEqual(
+            result,
+            {"run_id": 5, "state": RunStatus.COMPLETED.value, "publication": "failed"},
+        )
+        self.assertEqual(run.status, RunStatus.COMPLETED)
+        self.assertEqual(factory.session.findings, persisted_findings)
+        publish.assert_awaited_once()
 
 
 if __name__ == "__main__":

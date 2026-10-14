@@ -15,7 +15,9 @@ from sqlalchemy.exc import SQLAlchemyError
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
 from .checkout import RepositoryCheckoutError
+from .github import GitHubPublicationError
 from .pipeline import run_analysis_pipeline
+from .publication import publish_completed_run
 
 logger = logging.getLogger(__name__)
 
@@ -40,7 +42,7 @@ def create_worker(settings: Settings | None = None) -> Worker:
         redis_settings=redis_settings,
         on_startup=on_startup,
         on_shutdown=on_shutdown,
-        ctx={"database_url": worker_settings.database_url},
+        ctx={"database_url": worker_settings.database_url, "settings": worker_settings},
         max_tries=MAX_JOB_TRIES,
         job_timeout=JOB_TIMEOUT_SECONDS,
         keep_result=3600,
@@ -117,8 +119,62 @@ async def process_run(ctx: dict[str, Any], run_id: int) -> dict[str, str | int]:
         await _fail_after_error(session_factory, run_id, error)
         raise RunProcessingError("Run processing failed.") from None
 
-    logger.info("run_processing_finished", extra={"run_id": run_id, "state": state})
-    return {"run_id": run_id, "state": state}
+    publication = "not_attempted"
+    if state == RunStatus.COMPLETED.value:
+        try:
+            publication = await publish_completed_run(
+                session_factory,
+                run_id,
+                settings=ctx.get("settings"),
+                publisher=ctx.get("publisher_component"),
+            )
+        except GitHubPublicationError as error:
+            attempt = _attempt_number(ctx)
+            if error.transient and attempt < MAX_JOB_TRIES:
+                delay = (
+                    error.retry_after_seconds
+                    or RETRY_DELAYS_SECONDS[min(attempt - 1, len(RETRY_DELAYS_SECONDS) - 1)]
+                )
+                logger.warning(
+                    "github_check_run_retry",
+                    extra={
+                        "run_id": run_id,
+                        "attempt": attempt,
+                        "error_type": type(error).__name__,
+                    },
+                )
+                raise Retry(defer=delay) from None
+            logger.error(
+                "github_check_run_failed",
+                extra={"run_id": run_id, "error_type": type(error).__name__},
+            )
+            publication = "failed"
+        except SQLAlchemyError as error:
+            attempt = _attempt_number(ctx)
+            if attempt < MAX_JOB_TRIES:
+                delay = RETRY_DELAYS_SECONDS[min(attempt - 1, len(RETRY_DELAYS_SECONDS) - 1)]
+                logger.warning(
+                    "github_publication_state_retry",
+                    extra={"run_id": run_id, "attempt": attempt, "error_type": type(error).__name__},
+                )
+                raise Retry(defer=delay) from None
+            logger.error(
+                "github_publication_state_failed",
+                extra={"run_id": run_id, "error_type": type(error).__name__},
+            )
+            publication = "failed"
+        except (ValueError, TypeError) as error:
+            logger.error(
+                "github_check_run_failed",
+                extra={"run_id": run_id, "error_type": type(error).__name__},
+            )
+            publication = "failed"
+
+    logger.info(
+        "run_processing_finished",
+        extra={"run_id": run_id, "state": state, "publication_status": publication},
+    )
+    return {"run_id": run_id, "state": state, "publication": publication}
 
 
 async def _fail_after_error(

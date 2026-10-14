@@ -38,6 +38,14 @@ class DeliveryStatus(StrEnum):
     ACCEPTED = "accepted"
 
 
+class PublicationStatus(StrEnum):
+    PENDING = "pending"
+    PUBLISHING = "publishing"
+    PUBLISHED = "published"
+    FAILED = "failed"
+    SKIPPED = "skipped"
+
+
 class TimestampMixin:
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), nullable=False, server_default=func.now()
@@ -96,8 +104,18 @@ class Run(TimestampMixin, Base):
         default=RunStatus.PENDING,
         server_default=RunStatus.PENDING.value,
     )
+    publication_status: Mapped[str] = mapped_column(
+        String(32),
+        nullable=False,
+        default=PublicationStatus.PENDING,
+        server_default=PublicationStatus.PENDING.value,
+    )
+    github_check_run_id: Mapped[int | None] = mapped_column(BigInteger, nullable=True)
 
     repository: Mapped[Repository] = relationship(back_populates="runs")
+    findings: Mapped[list[AnalysisFinding]] = relationship(
+        back_populates="run", cascade="all, delete-orphan"
+    )
 
 
 class AnalysisFinding(TimestampMixin, Base):
@@ -130,6 +148,7 @@ class AnalysisFinding(TimestampMixin, Base):
     evidence: Mapped[list[dict[str, object]]] = mapped_column(
         JSON().with_variant(JSONB(), "postgresql"), nullable=False
     )
+    run: Mapped[Run] = relationship(back_populates="findings")
 
 
 class WebhookDelivery(TimestampMixin, Base):

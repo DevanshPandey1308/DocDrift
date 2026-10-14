@@ -83,6 +83,8 @@ class ApiTests(unittest.TestCase):
                 "DOCDRIFT_API_TITLE": "Configured API",
                 "DOCDRIFT_API_VERSION": "2.3.4",
                 "DOCDRIFT_GITHUB_WEBHOOK_SECRET": self.secret,
+                "DOCDRIFT_GITHUB_APP_ID": "123456",
+                "DOCDRIFT_GITHUB_APP_PRIVATE_KEY": "line one\\nline two",
                 "DOCDRIFT_DATABASE_URL": "postgresql://user:pass@localhost/docdrift",
                 "DOCDRIFT_REDIS_URL": "redis://:pass@localhost:6379/2",
             },
@@ -93,6 +95,8 @@ class ApiTests(unittest.TestCase):
         self.assertEqual(settings.title, "Configured API")
         self.assertEqual(settings.version, "2.3.4")
         self.assertEqual(settings.github_webhook_secret, self.secret)
+        self.assertEqual(settings.github_app_id, "123456")
+        self.assertEqual(settings.github_app_private_key, "line one\nline two")
         self.assertEqual(settings.database_url, "postgresql://user:pass@localhost/docdrift")
         self.assertEqual(settings.redis_url, "redis://:pass@localhost:6379/2")
 

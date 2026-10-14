@@ -5,6 +5,7 @@ import unittest
 from pathlib import Path
 from types import SimpleNamespace
 from typing import Self
+from unittest.mock import AsyncMock, patch
 
 from docdrift_api.models import RunStatus
 from docdrift_worker import worker
@@ -101,13 +102,19 @@ class AnalysisPipelineTests(unittest.IsolatedAsyncioTestCase):
             )
             session_factory = FakeSessionFactory(make_run())
             session_factory.session.run.head_sha = head_sha
-            result = await worker.process_run(
-                {"session_factory": session_factory, "checkout_component": checkout},
-                31,
-            )
+            with patch.object(
+                worker, "publish_completed_run", new=AsyncMock(return_value="failed")
+            ):
+                result = await worker.process_run(
+                    {"session_factory": session_factory, "checkout_component": checkout},
+                    31,
+                )
 
         self.assertEqual(calls, [("owner/project", 17, head_sha)])
-        self.assertEqual(result, {"run_id": 31, "state": RunStatus.COMPLETED.value})
+        self.assertEqual(
+            result,
+            {"run_id": 31, "state": RunStatus.COMPLETED.value, "publication": "failed"},
+        )
         self.assertEqual(session_factory.session.run.status, RunStatus.COMPLETED)
         self.assertEqual(len(session_factory.session.findings), 1)
         persisted = session_factory.session.findings[0]

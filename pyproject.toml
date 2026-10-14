@@ -17,6 +17,8 @@ api = [
     "alembic>=1.13,<2",
     "asyncpg>=0.29,<1",
     "arq>=0.28,<0.29",
+    "httpx>=0.27,<1",
+    "PyJWT[crypto]>=2.8,<3",
 ]
 dev = ["pytest>=8", "ruff>=0.6", "mypy>=1.11", "httpx>=0.27"]
 
