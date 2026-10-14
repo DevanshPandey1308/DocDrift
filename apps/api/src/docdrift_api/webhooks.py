@@ -6,13 +6,16 @@ import hashlib
 import hmac
 import json
 import re
-from typing import Literal, NoReturn
+from typing import Any, Literal, NoReturn
 
 from fastapi import APIRouter, Request
 from fastapi.responses import JSONResponse
 from pydantic import BaseModel
+from sqlalchemy.exc import SQLAlchemyError
+from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
 from .config import Settings
+from .persistence import PersistenceResult, PullRequestRecord, persist_pull_request
 
 MAX_DELIVERY_ID_LENGTH = 255
 _SIGNATURE_HEX = re.compile(r"^[0-9a-fA-F]{64}$")
@@ -23,7 +26,7 @@ def _reject_nonstandard_json_constant(value: str) -> NoReturn:
 
 
 class WebhookResponse(BaseModel):
-    status: Literal["validated", "ignored"]
+    status: Literal["accepted", "duplicate", "ignored"]
     event: str
     delivery_id: str
     message: str
@@ -56,6 +59,59 @@ def _signature_is_valid(header: str, secret: str, body: bytes) -> bool:
     return hmac.compare_digest(expected_digest, provided_digest)
 
 
+class PayloadValidationError(ValueError):
+    """A signed pull-request event lacks fields needed for durable intake."""
+
+
+def _positive_integer(value: Any, field: str, *, optional: bool = False) -> int | None:
+    if optional and value is None:
+        return None
+    if isinstance(value, bool) or not isinstance(value, int) or value < 1:
+        raise PayloadValidationError(f"{field} must be a positive integer.")
+    return value
+
+
+def _required_object(value: Any, field: str) -> dict[str, Any]:
+    if not isinstance(value, dict):
+        raise PayloadValidationError(f"{field} must be an object.")
+    return value
+
+
+def _required_text(value: Any, field: str, maximum: int) -> str:
+    if not isinstance(value, str) or not value.strip() or value != value.strip() or len(value) > maximum:
+        raise PayloadValidationError(f"{field} must contain 1 to {maximum} valid characters.")
+    return value
+
+
+def _pull_request_record(payload: dict[str, Any]) -> PullRequestRecord:
+    repository = _required_object(payload.get("repository"), "repository")
+    pull_request = _required_object(payload.get("pull_request"), "pull_request")
+    head = _required_object(pull_request.get("head"), "pull_request.head")
+    repository_name = _required_text(repository.get("full_name"), "repository.full_name", 255)
+    repository_id = _positive_integer(
+        repository.get("id"), "repository.id", optional=True
+    )
+    pull_request_number = _positive_integer(pull_request.get("number"), "pull_request.number")
+    head_sha = _required_text(head.get("sha"), "pull_request.head.sha", 128)
+
+    installation_id: int | None = None
+    installation_value = payload.get("installation")
+    if installation_value is not None:
+        installation = _required_object(installation_value, "installation")
+        installation_id = _positive_integer(
+            installation.get("id"), "installation.id", optional=True
+        )
+
+    assert pull_request_number is not None
+    return PullRequestRecord(
+        repository_full_name=repository_name,
+        github_repository_id=repository_id,
+        installation_id=installation_id,
+        pull_request_number=pull_request_number,
+        head_sha=head_sha,
+    )
+
+
 def create_webhook_router(settings: Settings) -> APIRouter:
     router = APIRouter()
 
@@ -63,6 +119,7 @@ def create_webhook_router(settings: Settings) -> APIRouter:
         "/webhooks/github",
         response_model=WebhookResponse,
         responses={
+            202: {"model": WebhookResponse, "description": "Delivery and run were persisted."},
             400: {"model": WebhookErrorResponse, "description": "Invalid headers or payload."},
             401: {"model": WebhookErrorResponse, "description": "Missing or invalid signature."},
             503: {"model": WebhookErrorResponse, "description": "Webhook secret is not configured."},
@@ -123,11 +180,50 @@ def create_webhook_router(settings: Settings) -> APIRouter:
                 message="Event type is not supported; no analysis was run.",
             )
 
-        return WebhookResponse(
-            status="validated",
-            event=normalized_event,
-            delivery_id=delivery_id,
-            message="Webhook validated; no analysis was run or queued.",
+        try:
+            pull_request = _pull_request_record(payload)
+        except PayloadValidationError as error:
+            return _error(400, "invalid_payload", str(error))
+
+        session_factory: async_sessionmaker[AsyncSession] | None = (
+            request.app.state.session_factory
+        )
+        if session_factory is None:
+            return _error(
+                503,
+                "database_not_configured",
+                "Pull-request intake requires DOCDRIFT_DATABASE_URL to be configured.",
+            )
+
+        try:
+            result: PersistenceResult = await persist_pull_request(
+                session_factory,
+                delivery_id=delivery_id,
+                pull_request=pull_request,
+            )
+        except (SQLAlchemyError, RuntimeError):
+            return _error(
+                503,
+                "persistence_failed",
+                "Webhook delivery could not be durably recorded; retry the delivery.",
+            )
+
+        if result.duplicate_delivery:
+            return WebhookResponse(
+                status="duplicate",
+                event=normalized_event,
+                delivery_id=delivery_id,
+                message="Webhook delivery was already recorded; no additional run was created.",
+            )
+
+        return JSONResponse(
+            status_code=202,
+            content=WebhookResponse(
+                status="accepted",
+                event=normalized_event,
+                delivery_id=delivery_id,
+                message="Webhook delivery and pending run were persisted; no analysis was run or queued.",
+            ).model_dump(),
         )
 
     return router

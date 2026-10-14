@@ -42,11 +42,20 @@ Install the API and development dependencies from the repository root:
 python -m pip install -e ".[api,dev]"
 ```
 
-The API supports `DOCDRIFT_API_TITLE` (default `DocDrift API`), `DOCDRIFT_API_VERSION` (default `0.1.0`), and `DOCDRIFT_GITHUB_WEBHOOK_SECRET` (unset by default). Set a random, process-local development secret before starting the server; this PowerShell command does not write it to the repository:
+The API supports `DOCDRIFT_API_TITLE` (default `DocDrift API`), `DOCDRIFT_API_VERSION` (default `0.1.0`), `DOCDRIFT_GITHUB_WEBHOOK_SECRET` (unset by default), and `DOCDRIFT_DATABASE_URL` (unset by default). Configure the webhook secret and PostgreSQL URL for pull-request intake. The health endpoint and app import do not require either setting. For local development, use an async PostgreSQL URL such as `postgresql+asyncpg://user:password@localhost:5432/docdrift`; common `postgresql://` URLs are also adapted to the asyncpg driver. Never commit real credentials. Set a random, process-local webhook secret before starting the server:
 
 ```powershell
 $env:DOCDRIFT_GITHUB_WEBHOOK_SECRET = [Convert]::ToHexString([Security.Cryptography.RandomNumberGenerator]::GetBytes(32))
+$env:DOCDRIFT_DATABASE_URL = "postgresql+asyncpg://docdrift:local-password@localhost:5432/docdrift"
 ```
+
+Apply the initial schema to a fresh PostgreSQL database with Alembic:
+
+```powershell
+alembic -c .\apps\api\alembic.ini upgrade head
+```
+
+The initial schema stores GitHub installations, repositories, PR runs, and webhook delivery metadata. PR runs start with status `pending`; this milestone does not enqueue or analyze them. Delivery IDs are unique, so a repeated delivery returns `duplicate`; a distinct delivery for an already-recorded `(repository, PR number, head SHA)` is accepted without creating a second run. No raw webhook body, signature, or secret is persisted. When a valid pull-request event omits its installation object, the repository is stored without an installation association until one is known.
 
 Start the local server with:
 
@@ -60,12 +69,12 @@ uvicorn docdrift_api.main:app --reload
 Invoke-RestMethod http://127.0.0.1:8000/health
 ```
 
-`POST /webhooks/github` requires `X-Hub-Signature-256`, `X-GitHub-Event`, and `X-GitHub-Delivery`. Signatures use GitHub's `sha256=<hex HMAC-SHA256>` format over the exact request bytes. Only `pull_request` events are accepted for validation; other validly signed event types return `200` with `status: "ignored"`.
+`POST /webhooks/github` requires `X-Hub-Signature-256`, `X-GitHub-Event`, and `X-GitHub-Delivery`. Signatures use GitHub's `sha256=<hex HMAC-SHA256>` format over the exact request bytes. Only `pull_request` events are persisted; other validly signed event types return `200` with `status: "ignored"`.
 
 To send a correctly signed local request from PowerShell while the server is running:
 
 ```powershell
-$body = [Text.Encoding]::UTF8.GetBytes('{"action":"opened","pull_request":{}}')
+$body = [Text.Encoding]::UTF8.GetBytes('{"action":"opened","repository":{"id":42,"full_name":"owner/project"},"pull_request":{"number":3,"head":{"sha":"abc123"}}}')
 $hmac = [Security.Cryptography.HMACSHA256]::new([Text.Encoding]::UTF8.GetBytes($env:DOCDRIFT_GITHUB_WEBHOOK_SECRET))
 $signature = 'sha256=' + [Convert]::ToHexString($hmac.ComputeHash($body)).ToLowerInvariant()
 $headers = @{
@@ -77,7 +86,7 @@ Invoke-RestMethod -Uri http://127.0.0.1:8000/webhooks/github -Method Post -Heade
 $hmac.Dispose()
 ```
 
-Responses are `200` for validated pull requests or ignored event types, `400` for missing event/delivery headers or invalid delivery IDs and payloads, `401` for missing or invalid signatures, and `503` when the server secret is not configured. Errors use `{"error":{"code":"...","message":"..."}}`. A validated response means signature and JSON validation only; no persistence, duplicate-delivery detection, queueing, analysis, or GitHub API response exists yet. The validated delivery ID is returned for a future idempotency layer. API tests use FastAPI's in-process test client and make no external network calls.
+Responses are `202` after a pull-request delivery and its initial run persist successfully, `200` for duplicate deliveries or ignored event types, `400` for invalid headers or payloads, `401` for missing or invalid signatures, and `503` when webhook or database configuration is unavailable or persistence fails. Errors use `{"error":{"code":"...","message":"..."}}`. A successful response confirms durable intake only: no job is queued, no analysis runs, and no GitHub API response is published. API unit tests use FastAPI's in-process test client and make no external network calls. Optional PostgreSQL integration tests use `DOCDRIFT_TEST_DATABASE_URL`; migrate a dedicated test database before running them.
 
 Example text finding:
 

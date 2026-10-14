@@ -3,13 +3,26 @@ from __future__ import annotations
 import hashlib
 import hmac
 import unittest
-from unittest.mock import patch
+from typing import Any, Protocol, cast
+from unittest.mock import AsyncMock, patch
 
 from docdrift_api import app, create_app
 from docdrift_api.config import Settings
+from docdrift_api.persistence import PersistenceResult
 from fastapi import FastAPI
 from fastapi.testclient import TestClient
-from httpx import Response
+from sqlalchemy.exc import SQLAlchemyError
+from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
+
+
+class ResponseLike(Protocol):
+    @property
+    def status_code(self) -> int: ...
+
+    @property
+    def text(self) -> str: ...
+
+    def json(self) -> Any: ...
 
 
 class ApiTests(unittest.TestCase):
@@ -42,7 +55,7 @@ class ApiTests(unittest.TestCase):
             headers["X-Hub-Signature-256"] = self._signature(body)
         return headers
 
-    def _assert_error(self, response: Response, status: int, code: str, message: str) -> None:
+    def _assert_error(self, response: ResponseLike, status: int, code: str, message: str) -> None:
         self.assertEqual(response.status_code, status)
         self.assertEqual(
             response.json(),
@@ -56,6 +69,7 @@ class ApiTests(unittest.TestCase):
                 "DOCDRIFT_API_TITLE": "Configured API",
                 "DOCDRIFT_API_VERSION": "2.3.4",
                 "DOCDRIFT_GITHUB_WEBHOOK_SECRET": self.secret,
+                "DOCDRIFT_DATABASE_URL": "postgresql://user:pass@localhost/docdrift",
             },
             clear=True,
         ):
@@ -64,6 +78,7 @@ class ApiTests(unittest.TestCase):
         self.assertEqual(settings.title, "Configured API")
         self.assertEqual(settings.version, "2.3.4")
         self.assertEqual(settings.github_webhook_secret, self.secret)
+        self.assertEqual(settings.database_url, "postgresql://user:pass@localhost/docdrift")
 
     def test_health_endpoint_works_without_webhook_secret(self) -> None:
         client = TestClient(create_app(Settings()))
@@ -81,18 +96,125 @@ class ApiTests(unittest.TestCase):
         self.assertEqual(response.status_code, 200)
 
     def test_valid_pull_request_is_accepted_and_delivery_id_is_preserved(self) -> None:
-        body = b'{ "action" : "opened", "pull_request": {} }\n'
-        response = self.client.post("/webhooks/github", content=body, headers=self._headers(body))
+        body = self._pull_request_body()
+        client = self._database_client()
+        with patch(
+            "docdrift_api.webhooks.persist_pull_request",
+            new=AsyncMock(return_value=PersistenceResult(duplicate_delivery=False)),
+        ) as persist:
+            response = client.post("/webhooks/github", content=body, headers=self._headers(body))
 
-        self.assertEqual(response.status_code, 200)
+        self.assertEqual(response.status_code, 202)
         self.assertEqual(
             response.json(),
             {
-                "status": "validated",
+                "status": "accepted",
                 "event": "pull_request",
                 "delivery_id": "delivery-123",
-                "message": "Webhook validated; no analysis was run or queued.",
+                "message": "Webhook delivery and pending run were persisted; no analysis was run or queued.",
             },
+        )
+        persist.assert_awaited_once()
+
+    def test_duplicate_delivery_returns_consistent_duplicate_response(self) -> None:
+        body = self._pull_request_body()
+        with patch(
+            "docdrift_api.webhooks.persist_pull_request",
+            new=AsyncMock(return_value=PersistenceResult(duplicate_delivery=True)),
+        ) as persist:
+            response = self._database_client().post(
+                "/webhooks/github", content=body, headers=self._headers(body)
+            )
+
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(response.json()["status"], "duplicate")
+        self.assertEqual(response.json()["delivery_id"], "delivery-123")
+        persist.assert_awaited_once()
+
+    def test_missing_pull_request_fields_are_rejected_before_database_access(self) -> None:
+        body = b'{"action":"opened","pull_request":{}}'
+        with patch("docdrift_api.webhooks.persist_pull_request", new=AsyncMock()) as persist:
+            response = self.client.post(
+                "/webhooks/github", content=body, headers=self._headers(body)
+            )
+
+        self._assert_error(
+            response, 400, "invalid_payload", "repository must be an object."
+        )
+        persist.assert_not_awaited()
+
+    def test_valid_pull_request_without_database_is_not_acknowledged_as_accepted(self) -> None:
+        body = self._pull_request_body()
+        response = self.client.post("/webhooks/github", content=body, headers=self._headers(body))
+
+        self._assert_error(
+            response,
+            503,
+            "database_not_configured",
+            "Pull-request intake requires DOCDRIFT_DATABASE_URL to be configured.",
+        )
+
+    def test_missing_installation_is_stored_as_absent_not_invented(self) -> None:
+        body = (
+            b'{"action":"opened","repository":{"full_name":"owner/project"},'
+            b'"pull_request":{"number":3,"head":{"sha":"abc123"}}}'
+        )
+        with patch(
+            "docdrift_api.webhooks.persist_pull_request",
+            new=AsyncMock(return_value=PersistenceResult(duplicate_delivery=False)),
+        ) as persist:
+            response = self._database_client().post(
+                "/webhooks/github", content=body, headers=self._headers(body)
+            )
+
+        self.assertEqual(response.status_code, 202)
+        arguments = persist.await_args
+        assert arguments is not None
+        record = arguments.kwargs["pull_request"]
+        self.assertIsNone(record.installation_id)
+        self.assertIsNone(record.github_repository_id)
+
+    def test_database_failure_does_not_return_successful_acceptance(self) -> None:
+        body = self._pull_request_body()
+        with patch(
+            "docdrift_api.webhooks.persist_pull_request",
+            new=AsyncMock(side_effect=SQLAlchemyError("private database details")),
+        ):
+            response = self._database_client().post(
+                "/webhooks/github", content=body, headers=self._headers(body)
+            )
+
+        self._assert_error(
+            response,
+            503,
+            "persistence_failed",
+            "Webhook delivery could not be durably recorded; retry the delivery.",
+        )
+        self.assertNotIn("private database details", response.text)
+
+    def test_invalid_signature_is_rejected_before_persistence(self) -> None:
+        body = self._pull_request_body()
+        with patch("docdrift_api.webhooks.persist_pull_request", new=AsyncMock()) as persist:
+            response = self._database_client().post(
+                "/webhooks/github",
+                content=body,
+                headers=self._headers(body, signature="sha256=" + "0" * 64),
+            )
+
+        self._assert_error(response, 401, "invalid_signature", "Webhook signature is invalid.")
+        persist.assert_not_awaited()
+
+    def _database_client(self) -> TestClient:
+        # The factory is injected solely to exercise the API adapter without PostgreSQL.
+        factory = cast(async_sessionmaker[AsyncSession], object())
+        return TestClient(create_app(Settings(github_webhook_secret=self.secret), session_factory=factory))
+
+    @staticmethod
+    def _pull_request_body() -> bytes:
+        return (
+            b'{"action":"opened","installation":{"id":7},'
+            b'"repository":{"id":42,"full_name":"docdrift/example"},'
+            b'"pull_request":{"number":3,"head":{"sha":"abc123"}}}'
         )
 
     def test_invalid_signature_is_rejected_without_disclosing_secret(self) -> None:
