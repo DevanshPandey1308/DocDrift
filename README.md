@@ -64,7 +64,7 @@ Apply the initial schema to a fresh PostgreSQL database with Alembic:
 alembic -c .\apps\api\alembic.ini upgrade head
 ```
 
-The schema stores GitHub installations, repositories, PR runs, and webhook delivery metadata. It includes an `awaiting_analysis` run state for the current worker placeholder. A distinct delivery for an existing `(repository, PR number, head SHA)` reuses that run. No raw webhook body, signature, or secret is persisted. When a valid pull-request event omits its installation object, the repository is stored without an installation association until one is known.
+The schema stores GitHub installations, repositories, PR runs, webhook delivery metadata, and deterministic analysis findings with their claim locations and JSON evidence. `awaiting_analysis` remains as a legacy state; successful deterministic scans now transition runs from `pending` through `running` to `completed`. A distinct delivery for an existing `(repository, PR number, head SHA)` reuses that run. No raw webhook body, signature, or secret is persisted. When a valid pull-request event omits its installation object, the repository is stored without an installation association until one is known.
 
 Start the local server with:
 
@@ -103,7 +103,9 @@ $hmac.Dispose()
 
 Responses are `202` only after the delivery and run are persisted and the job is queued, `200` for an already-recorded delivery or ignored event, `400` for invalid headers or payloads, `401` for an invalid signature, and `503` when required configuration, persistence, or Redis publication is unavailable. If Redis publication fails after persistence, retrying that webhook finds the existing run and safely retries publication. ARQ job IDs use `docdrift:run:<run_id>`; ARQ suppresses duplicate active/recent IDs, and the worker's state check keeps repeated executions safe. ARQ may execute jobs more than once; successful job results are retained for one hour. The worker allows up to three attempts with deferred retries and uses a 30-second timeout.
 
-The worker validates the persisted run and transitions it from `pending` through `running` to `awaiting_analysis`. It does not clone repositories, analyze documentation, or publish GitHub results. The health endpoint reports API health only and does not claim Redis health. API unit tests use mocks and make no external network calls. Optional PostgreSQL integration tests use `DOCDRIFT_TEST_DATABASE_URL`; migrate a dedicated test database before running them.
+The worker fetches the persisted 40-character PR head SHA from a URL constructed only for `github.com/{owner}/{repo}.git`, checks out that exact commit detached, and runs the deterministic `docdrift_core` scan. Git operations have bounded timeouts, use a temporary checkout that is removed after processing, disable interactive credential helpers and redirects, and never execute repository code. Only public GitHub repositories are currently supported; private-repository installation-token authentication is not implemented. Malformed identities/revisions, inaccessible repositories, Git failures, and incomplete core scans fail the run rather than marking it completed.
+
+The core does not yet provide reliable diff-to-symbol impact mapping, so each run scans all supported Markdown and Python files using the existing core defaults. Findings, claim/document locations, checker methods, and source evidence are replaced transactionally for that run before it is marked `completed`; retrying an active run cannot append duplicate results. No GitHub checks or comments are published yet. The health endpoint reports API health only and does not claim Redis health. Unit tests use local Git repositories and mocks without GitHub network access. Optional PostgreSQL integration tests use `DOCDRIFT_TEST_DATABASE_URL`; migrate a dedicated test database before running them.
 
 Example text finding:
 

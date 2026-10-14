@@ -6,14 +6,16 @@ import logging
 from typing import Any
 
 from arq.worker import Retry, Worker
-from sqlalchemy import select, update
-from sqlalchemy.exc import SQLAlchemyError
-from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
-
 from docdrift_api.config import Settings
 from docdrift_api.database import create_session_factory, dispose_engine
 from docdrift_api.models import Run, RunStatus
 from docdrift_api.queue import redis_settings_from_url
+from sqlalchemy import update
+from sqlalchemy.exc import SQLAlchemyError
+from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
+
+from .checkout import RepositoryCheckoutError
+from .pipeline import run_analysis_pipeline
 
 logger = logging.getLogger(__name__)
 
@@ -66,28 +68,6 @@ async def on_shutdown(ctx: dict[str, Any]) -> None:
     logger.info("worker_stopped")
 
 
-async def _process_run_transaction(
-    session_factory: async_sessionmaker[AsyncSession], run_id: int
-) -> str:
-    """Validate a pending run and persist the explicit no-analysis state."""
-    async with session_factory() as session, session.begin():
-        run = await session.scalar(select(Run).where(Run.id == run_id).with_for_update())
-        if run is None:
-            return "missing"
-        if run.status != RunStatus.PENDING:
-            return run.status.value
-        if run.repository_id < 1 or run.pull_request_number < 1 or not run.head_sha:
-            raise ValueError("Persisted run is missing required identity fields.")
-
-        run.status = RunStatus.RUNNING
-        await session.flush()
-
-        # Analysis is intentionally out of scope. This state must not imply success.
-        run.status = RunStatus.AWAITING_ANALYSIS
-        await session.flush()
-        return RunStatus.AWAITING_ANALYSIS.value
-
-
 async def _mark_failed_if_active(
     session_factory: async_sessionmaker[AsyncSession], run_id: int
 ) -> None:
@@ -109,7 +89,7 @@ def _attempt_number(ctx: dict[str, Any]) -> int:
 
 
 async def process_run(ctx: dict[str, Any], run_id: int) -> dict[str, str | int]:
-    """Idempotently transition one persisted run to awaiting analysis."""
+    """Run deterministic PR analysis and persist findings for one queued run."""
     if isinstance(run_id, bool) or not isinstance(run_id, int) or run_id < 1:
         raise ValueError("run_id must be a positive integer.")
     session_factory = ctx.get("session_factory")
@@ -117,8 +97,12 @@ async def process_run(ctx: dict[str, Any], run_id: int) -> dict[str, str | int]:
         raise RuntimeError("Worker database session factory is not initialized.")
 
     try:
-        state = await _process_run_transaction(session_factory, run_id)
-    except (SQLAlchemyError, OSError, TimeoutError) as error:
+        state = await run_analysis_pipeline(
+            session_factory,
+            run_id,
+            checkout_component=ctx.get("checkout_component"),
+        )
+    except (SQLAlchemyError, OSError, TimeoutError, RepositoryCheckoutError) as error:
         attempt = _attempt_number(ctx)
         if attempt < MAX_JOB_TRIES:
             delay = RETRY_DELAYS_SECONDS[min(attempt - 1, len(RETRY_DELAYS_SECONDS) - 1)]

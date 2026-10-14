@@ -6,15 +6,19 @@ from datetime import datetime
 from enum import StrEnum
 
 from sqlalchemy import (
+    JSON,
     BigInteger,
+    Boolean,
     DateTime,
     Enum,
     ForeignKey,
     Integer,
     String,
+    Text,
     UniqueConstraint,
     func,
 )
+from sqlalchemy.dialects.postgresql import JSONB
 from sqlalchemy.orm import DeclarativeBase, Mapped, mapped_column, relationship
 
 
@@ -94,6 +98,38 @@ class Run(TimestampMixin, Base):
     )
 
     repository: Mapped[Repository] = relationship(back_populates="runs")
+
+
+class AnalysisFinding(TimestampMixin, Base):
+    """One deterministic claim result and its source evidence for a PR run."""
+
+    __tablename__ = "analysis_findings"
+    __table_args__ = (
+        UniqueConstraint("run_id", "claim_id", name="uq_analysis_findings_run_claim"),
+    )
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    run_id: Mapped[int] = mapped_column(
+        ForeignKey("runs.id", ondelete="CASCADE"), nullable=False, index=True
+    )
+    claim_id: Mapped[str] = mapped_column(String(64), nullable=False)
+    claim_type: Mapped[str] = mapped_column(String(64), nullable=False)
+    subject: Mapped[str] = mapped_column(Text, nullable=False)
+    expected: Mapped[object] = mapped_column(
+        JSON().with_variant(JSONB(), "postgresql"), nullable=False
+    )
+    claim_text: Mapped[str] = mapped_column(Text, nullable=False)
+    document_path: Mapped[str] = mapped_column(String(1024), nullable=False)
+    document_line: Mapped[int] = mapped_column(Integer, nullable=False)
+    span_start: Mapped[int] = mapped_column(Integer, nullable=False)
+    span_end: Mapped[int] = mapped_column(Integer, nullable=False)
+    verdict: Mapped[str] = mapped_column(String(32), nullable=False)
+    explanation: Mapped[str] = mapped_column(Text, nullable=False)
+    verification_method: Mapped[str] = mapped_column(String(128), nullable=False)
+    deterministic: Mapped[bool] = mapped_column(Boolean, nullable=False)
+    evidence: Mapped[list[dict[str, object]]] = mapped_column(
+        JSON().with_variant(JSONB(), "postgresql"), nullable=False
+    )
 
 
 class WebhookDelivery(TimestampMixin, Base):

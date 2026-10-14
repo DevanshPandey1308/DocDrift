@@ -2,12 +2,11 @@ from __future__ import annotations
 
 import unittest
 from types import SimpleNamespace
-from typing import Any
+from typing import Any, Self
 from unittest.mock import AsyncMock, patch
 
 from arq.connections import RedisSettings
 from arq.worker import Retry
-
 from docdrift_api.config import Settings
 from docdrift_api.models import RunStatus
 from docdrift_worker import worker
@@ -27,7 +26,7 @@ class FakeSession:
         self.flush_count = 0
         self.fail_flush_at: int | None = None
 
-    async def __aenter__(self) -> FakeSession:
+    async def __aenter__(self) -> Self:
         return self
 
     async def __aexit__(self, *_: object) -> None:
@@ -60,6 +59,7 @@ def make_run(status: RunStatus = RunStatus.PENDING) -> SimpleNamespace:
     return SimpleNamespace(
         id=5,
         repository_id=3,
+        repository=SimpleNamespace(full_name="owner/project"),
         pull_request_number=10,
         head_sha="a" * 40,
         status=status,
@@ -106,61 +106,59 @@ class WorkerTests(unittest.IsolatedAsyncioTestCase):
         self.assertNotIn("session_factory", context)
         self.assertNotIn("database_engine", context)
 
-    async def test_pending_run_transitions_only_to_awaiting_analysis(self) -> None:
-        run = make_run()
-        factory = FakeSessionFactory(run)
+    async def test_worker_reports_state_returned_by_analysis_pipeline(self) -> None:
+        factory = FakeSessionFactory(make_run())
+        with patch.object(
+            worker, "run_analysis_pipeline", new=AsyncMock(return_value=RunStatus.COMPLETED.value)
+        ) as analyze:
+            result = await worker.process_run({"session_factory": factory}, 5)
 
-        state = await worker._process_run_transaction(factory, run.id)  # type: ignore[arg-type]
-
-        self.assertEqual(state, "awaiting_analysis")
-        self.assertEqual(run.status, RunStatus.AWAITING_ANALYSIS)
-        self.assertEqual(factory.session.flush_count, 2)
-
-    async def test_repeated_job_does_not_overwrite_newer_or_terminal_state(self) -> None:
-        for status in (RunStatus.AWAITING_ANALYSIS, RunStatus.COMPLETED, RunStatus.FAILED):
-            with self.subTest(status=status):
-                run = make_run(status)
-                state = await worker._process_run_transaction(
-                    FakeSessionFactory(run), run.id  # type: ignore[arg-type]
-                )
-                self.assertEqual(state, status.value)
-                self.assertEqual(run.status, status)
+        self.assertEqual(result, {"run_id": 5, "state": RunStatus.COMPLETED.value})
+        analyze.assert_awaited_once_with(factory, 5, checkout_component=None)
 
     async def test_missing_run_is_a_safe_no_op(self) -> None:
         self.assertEqual(
-            await worker._process_run_transaction(FakeSessionFactory(None), 999),  # type: ignore[arg-type]
-            "missing",
+            await worker.process_run({"session_factory": FakeSessionFactory(None)}, 999),  # type: ignore[arg-type]
+            {"run_id": 999, "state": "missing"},
         )
+
+    async def test_terminal_state_is_not_reanalyzed_or_overwritten(self) -> None:
+        for status in (RunStatus.COMPLETED, RunStatus.FAILED):
+            with self.subTest(status=status):
+                factory = FakeSessionFactory(make_run(status))
+                result = await worker.process_run({"session_factory": factory}, 5)
+                self.assertEqual(result, {"run_id": 5, "state": status.value})
+                self.assertEqual(factory.session.run.status, status)
 
     async def test_transient_failure_retries_then_marks_active_run_failed(self) -> None:
         factory = FakeSessionFactory(make_run())
         context = {"session_factory": factory, "job_try": 1}
         with (
-            patch.object(worker, "_process_run_transaction", side_effect=OSError("redis url secret")),
+            patch.object(worker, "run_analysis_pipeline", side_effect=OSError("source secret")),
             patch.object(worker, "_mark_failed_if_active", new=AsyncMock()) as mark_failed,
+            self.assertRaises(Retry) as raised,
         ):
-            with self.assertRaises(Retry) as raised:
-                await worker.process_run(context, 5)
+            await worker.process_run(context, 5)
         self.assertEqual(raised.exception.defer_score, 1000)
         mark_failed.assert_not_awaited()
 
         context["job_try"] = worker.MAX_JOB_TRIES
         with (
-            patch.object(worker, "_process_run_transaction", side_effect=OSError("temporary")),
+            patch.object(worker, "run_analysis_pipeline", side_effect=OSError("temporary")),
             patch.object(worker, "_mark_failed_if_active", new=AsyncMock()) as mark_failed,
+            self.assertRaises(worker.RunProcessingError),
         ):
-            with self.assertRaises(worker.RunProcessingError):
-                await worker.process_run(context, 5)
+            await worker.process_run(context, 5)
         mark_failed.assert_awaited_once_with(factory, 5)
 
     async def test_nontransient_failure_marks_run_failed_without_retry(self) -> None:
         factory = FakeSessionFactory(make_run())
         with (
-            patch.object(worker, "_process_run_transaction", side_effect=ValueError("bad row")),
+            patch.object(worker, "run_analysis_pipeline", side_effect=ValueError("bad row")),
             patch.object(worker, "_mark_failed_if_active", new=AsyncMock()) as mark_failed,
+            self.assertRaises(worker.RunProcessingError),
         ):
-            with self.assertRaises(worker.RunProcessingError):
-                await worker.process_run({"session_factory": factory}, 5)
+            await worker.process_run({"session_factory": factory}, 5)
         mark_failed.assert_awaited_once_with(factory, 5)
 
 
