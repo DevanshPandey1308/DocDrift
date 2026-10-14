@@ -53,6 +53,33 @@ class FindingExclusionTests(unittest.TestCase):
         with tempfile.TemporaryDirectory(dir=Path(__file__).parent) as temporary:
             exclusions = load_finding_exclusions(Path(temporary))
         self.assertIsNone(exclusions.reason_for("claim", "docs/guide.md"))
+        self.assertEqual(exclusions.inline_min, "breaking")
+        self.assertEqual(exclusions.max_inline_comments, 5)
+
+    def test_severity_inline_threshold_and_budget_are_validated(self) -> None:
+        with tempfile.TemporaryDirectory(dir=Path(__file__).parent) as temporary:
+            root = Path(temporary)
+            (root / ".docdrift.yml").write_text(
+                "version: 1\nseverity:\n  inline_min: misleading\n  max_inline_comments: 2\n",
+                encoding="utf-8",
+            )
+            config = load_finding_exclusions(root)
+        self.assertEqual(config.inline_min, "misleading")
+        self.assertEqual(config.max_inline_comments, 2)
+
+    def test_invalid_severity_values_fail_closed(self) -> None:
+        invalid_documents = (
+            "version: 1\nseverity:\n  inline_min: urgent\n",
+            "version: 1\nseverity:\n  max_inline_comments: -1\n",
+            "version: 1\nseverity:\n  max_inline_comments: 51\n",
+            "version: 1\nseverity:\n  unsupported: true\n",
+        )
+        for document in invalid_documents:
+            with self.subTest(document=document), tempfile.TemporaryDirectory(dir=Path(__file__).parent) as temporary:
+                root = Path(temporary)
+                (root / ".docdrift.yml").write_text(document, encoding="utf-8")
+                with self.assertRaises(RepositoryConfigError):
+                    load_finding_exclusions(root)
 
 
 if __name__ == "__main__":

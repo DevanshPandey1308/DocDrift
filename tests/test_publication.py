@@ -11,6 +11,7 @@ from docdrift_worker.github import GitHubPublicationError
 from docdrift_worker.publication import (
     PublicationInput,
     _prepare_publication,
+    _publish_latest_summary,
     publish_completed_run,
 )
 
@@ -27,6 +28,7 @@ class FakeSession:
     def __init__(self, scalars: list[object | None]) -> None:
         self.scalars = scalars
         self.flushed = False
+        self.executed: tuple[object, object] | None = None
 
     async def __aenter__(self) -> Self:
         return self
@@ -43,6 +45,9 @@ class FakeSession:
     async def flush(self) -> None:
         self.flushed = True
 
+    async def execute(self, statement: object, parameters: object = None) -> None:
+        self.executed = (statement, parameters)
+
 
 class FakeSessionFactory:
     def __init__(self, *sessions: FakeSession) -> None:
@@ -53,6 +58,65 @@ class FakeSessionFactory:
 
 
 class PublicationLifecycleTests(unittest.IsolatedAsyncioTestCase):
+    async def test_summary_error_marks_publication_failed_after_check_run_without_analysis_failure(self) -> None:
+        prepared = PublicationInput(
+            run_id=10,
+            repository="owner/project",
+            repository_id=58,
+            installation_id=73,
+            pull_request_number=3,
+            head_sha="a" * 40,
+            check_run_id=None,
+            findings=(),
+        )
+        publisher = SimpleNamespace(publish=AsyncMock(return_value=901))
+        factory = object()
+        with (
+            patch(
+                "docdrift_worker.publication._prepare_publication",
+                new=AsyncMock(return_value=prepared),
+            ),
+            patch(
+                "docdrift_worker.publication._publish_latest_summary",
+                new=AsyncMock(
+                    side_effect=GitHubPublicationError("summary unavailable", transient=True)
+                ),
+            ),
+            patch(
+                "docdrift_worker.publication._set_publication_status", new=AsyncMock()
+            ) as update_status,
+            self.assertRaises(GitHubPublicationError),
+        ):
+            await publish_completed_run(
+                factory,
+                10,
+                settings=Settings(),
+                publisher=publisher,  # type: ignore[arg-type]
+            )
+        publisher.publish.assert_awaited_once()
+        update_status.assert_awaited_once_with(factory, 10, PublicationStatus.FAILED)
+
+    async def test_stale_run_does_not_overwrite_newer_pr_summary(self) -> None:
+        run = SimpleNamespace(id=10, status=RunStatus.COMPLETED, repository_id=4, pull_request_number=3)
+        session = FakeSession([run, 11])
+        publisher = SimpleNamespace(publish_summary_comment=AsyncMock())
+        prepared = PublicationInput(
+            run_id=10,
+            repository="owner/project",
+            repository_id=58,
+            installation_id=73,
+            pull_request_number=3,
+            head_sha="a" * 40,
+            check_run_id=None,
+            findings=(),
+        )
+        state = await _publish_latest_summary(
+            FakeSessionFactory(session), prepared, publisher  # type: ignore[arg-type]
+        )
+        self.assertEqual(state, "stale")
+        publisher.publish_summary_comment.assert_not_awaited()
+        self.assertIsNotNone(session.executed)
+
     async def test_older_run_is_skipped_when_newer_pr_head_exists(self) -> None:
         old_run = SimpleNamespace(
             id=10,
@@ -77,6 +141,7 @@ class PublicationLifecycleTests(unittest.IsolatedAsyncioTestCase):
             repository="owner/project",
             repository_id=58,
             installation_id=73,
+            pull_request_number=3,
             head_sha="a" * 40,
             check_run_id=None,
             findings=(),
@@ -105,6 +170,7 @@ class PublicationLifecycleTests(unittest.IsolatedAsyncioTestCase):
             repository="owner/project",
             repository_id=None,
             installation_id=73,
+            pull_request_number=3,
             head_sha="a" * 40,
             check_run_id=None,
             findings=(),
@@ -137,6 +203,7 @@ class PublicationLifecycleTests(unittest.IsolatedAsyncioTestCase):
             repository="owner/project",
             repository_id=58,
             installation_id=73,
+            pull_request_number=3,
             head_sha="a" * 40,
             check_run_id=None,
             findings=(finding,),

@@ -19,6 +19,8 @@ class RepositoryConfigError(ValueError):
 class FindingExclusions:
     document_patterns: tuple[str, ...] = ()
     claim_reasons: dict[str, str] | None = None
+    inline_min: str = "breaking"
+    max_inline_comments: int = 5
 
     def reason_for(self, claim_id: str, document_path: str) -> str | None:
         reasons = self.claim_reasons or {}
@@ -153,6 +155,24 @@ def _parse_subset(content: str) -> dict[str, object]:
                     index += 1
                 findings[child_key] = rules
             result[key] = findings
+        elif key == "severity":
+            if value:
+                raise RepositoryConfigError("severity must be a mapping.")
+            severity: dict[str, object] = {}
+            while index < len(lines) and lines[index][0] == 2:
+                child_key, child_value = _split_field(lines[index][1])
+                index += 1
+                if child_key in severity:
+                    raise RepositoryConfigError("severity contains a duplicate key.")
+                if child_key == "inline_min":
+                    severity[child_key] = _scalar(child_value)
+                elif child_key == "max_inline_comments":
+                    if not child_value.isdecimal():
+                        raise RepositoryConfigError("severity.max_inline_comments must be an integer.")
+                    severity[child_key] = int(child_value)
+                else:
+                    raise RepositoryConfigError("severity supports only inline_min and max_inline_comments.")
+            result[key] = severity
         else:
             raise RepositoryConfigError(".docdrift.yml supports only version, docs, and findings.")
 
@@ -192,8 +212,8 @@ def load_finding_exclusions(repository_root: Path) -> FindingExclusions:
         raise RepositoryConfigError(".docdrift.yml could not be read as UTF-8.") from error
     data = _parse_subset(content)
 
-    if "version" not in data or set(data) - {"version", "docs", "findings"}:
-        raise RepositoryConfigError(".docdrift.yml requires version: 1 and supports only docs/findings.")
+    if "version" not in data or set(data) - {"version", "docs", "findings", "severity"}:
+        raise RepositoryConfigError(".docdrift.yml requires version: 1 and supports only docs/findings/severity.")
     docs = data.get("docs", {})
     if not isinstance(docs, dict):
         raise RepositoryConfigError("docs must be a mapping.")
@@ -224,4 +244,17 @@ def load_finding_exclusions(repository_root: Path) -> FindingExclusions:
         if claim_id in reasons:
             raise RepositoryConfigError(".docdrift.yml contains duplicate ignored claim IDs.")
         reasons[claim_id] = reason.strip()
-    return FindingExclusions(patterns, reasons)
+    severity = data.get("severity", {})
+    if not isinstance(severity, dict):
+        raise RepositoryConfigError("severity must be a mapping.")
+    inline_min = severity.get("inline_min", "breaking")
+    if inline_min not in {"breaking", "misleading", "cosmetic"}:
+        raise RepositoryConfigError("severity.inline_min must be breaking, misleading, or cosmetic.")
+    max_inline_comments = severity.get("max_inline_comments", 5)
+    if (
+        isinstance(max_inline_comments, bool)
+        or not isinstance(max_inline_comments, int)
+        or not 0 <= max_inline_comments <= 50
+    ):
+        raise RepositoryConfigError("severity.max_inline_comments must be an integer from 0 to 50.")
+    return FindingExclusions(patterns, reasons, inline_min, max_inline_comments)

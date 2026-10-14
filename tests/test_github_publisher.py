@@ -9,9 +9,12 @@ import httpx
 import jwt
 from docdrift_worker.github import (
     ANNOTATION_BATCH_SIZE,
+    SUMMARY_MARKER,
     GitHubAppCheckRunPublisher,
     GitHubPublicationError,
     build_check_summary,
+    build_pr_summary,
+    classify_severity,
 )
 
 
@@ -36,6 +39,8 @@ class FakeGitHubAPI:
         self.checks: dict[str, dict[str, Any]] = {}
         self.next_id = 900
         self.fail_check_creation = False
+        self.comments: dict[tuple[str, int], list[dict[str, Any]]] = {}
+        self.next_comment_id = 400
 
     async def __call__(self, request: httpx.Request) -> httpx.Response:
         self.requests.append(request)
@@ -46,6 +51,30 @@ class FakeGitHubAPI:
             check = self.checks.get(head_sha)
             runs = [check] if check else []
             return httpx.Response(200, json={"check_runs": runs}, request=request)
+        if "/issues/" in request.url.path and request.url.path.endswith("/comments"):
+            parts = request.url.path.split("/")
+            key = ("/".join(parts[2:4]), int(parts[5]))
+            if request.method == "GET":
+                return httpx.Response(200, json=self.comments.get(key, []), request=request)
+            if request.method == "POST":
+                body = json.loads(request.content)
+                self.next_comment_id += 1
+                comment = {
+                    "id": self.next_comment_id,
+                    "body": body["body"],
+                    "user": {"type": "Bot", "login": "docdrift[bot]"},
+                }
+                self.comments.setdefault(key, []).append(comment)
+                return httpx.Response(201, json=comment, request=request)
+        if "/issues/comments/" in request.url.path and request.method == "PATCH":
+            parts = request.url.path.split("/")
+            key = ("/".join(parts[2:4]), 12)
+            comment_id = int(parts[-1])
+            comment = next(
+                item for item in self.comments.get(key, []) if item["id"] == comment_id
+            )
+            comment["body"] = json.loads(request.content)["body"]
+            return httpx.Response(200, json=comment, request=request)
         if request.method == "GET" and request.url.path.endswith("/annotations"):
             check_id = int(request.url.path.split("/check-runs/", 1)[1].split("/", 1)[0])
             check = next((item for item in self.checks.values() if item["id"] == check_id), None)
@@ -174,6 +203,86 @@ class CheckRunPublisherTests(unittest.IsolatedAsyncioTestCase):
         self.assertIn(":12", annotation["message"])
         final = json.loads(updates[-1].content)
         self.assertEqual(final["conclusion"], "failure")
+
+    async def test_summary_comment_is_created_then_updated_with_marker_and_pr_scope(self) -> None:
+        api = FakeGitHubAPI()
+        api.comments[("owner/project", 12)] = [{"id": 77, "body": "A generic comment"}]
+        api.comments[("owner/project", 99)] = [
+            {
+                "id": 88,
+                "body": SUMMARY_MARKER + " another PR",
+                "user": {"type": "Bot", "login": "docdrift[bot]"},
+            }
+        ]
+        publisher = make_publisher(api)
+        arguments = {
+            "repository": "owner/project",
+            "repository_id": 58,
+            "installation_id": 73,
+            "pull_request_number": 12,
+            "findings": [FakeFinding()],
+        }
+        first_id = await publisher.publish_summary_comment(**arguments)
+        arguments["findings"] = [FakeFinding(claim_text="The default timeout is 60.")]
+        second_id = await publisher.publish_summary_comment(**arguments)
+
+        self.assertEqual(first_id, second_id)
+        self.assertEqual(len(api.comments[("owner/project", 12)]), 2)
+        self.assertEqual(api.comments[("owner/project", 99)][0]["body"], SUMMARY_MARKER + " another PR")
+        comment = next(
+            item for item in api.comments[("owner/project", 12)] if SUMMARY_MARKER in item["body"]
+        )
+        self.assertIn(SUMMARY_MARKER, comment["body"])
+        self.assertIn("misleading / false", comment["body"])
+        comment_requests = [
+            request
+            for request in api.requests
+            if "/issues/12/comments" in request.url.path or "/issues/comments/" in request.url.path
+        ]
+        self.assertEqual(
+            [request.method for request in comment_requests], ["GET", "POST", "GET", "PATCH"]
+        )
+        token_bodies = [
+            json.loads(request.content)
+            for request in api.requests
+            if request.url.path.endswith("/access_tokens")
+        ]
+        self.assertEqual(token_bodies[-1]["permissions"], {"pull_requests": "write"})
+
+    def test_severity_and_summary_order_are_deterministic_and_ignored_findings_stay_inactive(self) -> None:
+        breaking = FakeFinding(
+            claim_type="cli_flag",
+            claim_text="A flag is removed.",
+            document_path="z.md",
+            evidence=(
+                {"path": "src/cli.py", "line": 4, "snippet": "removed option"},
+                {"path": "src/parser.py", "line": 9, "snippet": "no longer registered"},
+            ),
+        )
+        breaking_low_confidence = FakeFinding(
+            claim_type="cli_flag", claim_text="Another flag is removed.", document_path="a.md"
+        )
+        misleading = FakeFinding(claim_type="default_value", claim_text="A default changed.")
+        unverifiable = FakeFinding(verdict="unverifiable", claim_type="cli_flag")
+        ignored = FakeFinding(ignored=True, claim_type="cli_flag", claim_text="Ignored.")
+        self.assertEqual(classify_severity(breaking), "breaking")
+        self.assertEqual(classify_severity(misleading), "misleading")
+        self.assertIsNone(classify_severity(unverifiable))
+        body = build_pr_summary([misleading, breaking_low_confidence, unverifiable, ignored, breaking])
+        self.assertLess(body.index("breaking / false"), body.index("misleading / false"))
+        self.assertLess(body.index("A flag is removed"), body.index("Another flag is removed"))
+        self.assertIn("unclassified / unverifiable", body)
+        self.assertIn("### Ignored findings (1)", body)
+
+    def test_summary_keeps_findings_beyond_inline_budget_and_never_invents_suggestions(self) -> None:
+        findings = [
+            FakeFinding(claim_type="cli_flag", claim_text=f"Removed flag {index}.")
+            for index in range(7)
+        ]
+        body = build_pr_summary(findings)
+        for index in range(len(findings)):
+            self.assertIn(f"Removed flag {index}", body)
+        self.assertNotIn("suggestion", body.lower())
 
     async def test_repeated_publication_reuses_check_by_external_id(self) -> None:
         api = FakeGitHubAPI()

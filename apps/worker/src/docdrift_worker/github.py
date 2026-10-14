@@ -20,6 +20,7 @@ logger = logging.getLogger(__name__)
 
 GITHUB_API = "https://api.github.com"
 CHECK_NAME = "DocDrift"
+SUMMARY_MARKER = "<!-- docdrift-summary:v1 -->"
 ANNOTATION_BATCH_SIZE = 50
 MAX_ANNOTATIONS = 1000
 MAX_ANNOTATION_MESSAGE = 10_000
@@ -49,6 +50,115 @@ class FindingView(Protocol):
 
     @property
     def evidence(self) -> Sequence[object]: ...
+
+
+SEVERITY_ORDER = {"breaking": 0, "misleading": 1, "cosmetic": 2, "unclassified": 3}
+_BREAKING_CLAIMS = {"function_signature", "cli_flag", "environment_variable", "route", "file_path", "python_version"}
+
+
+def classify_severity(finding: FindingView) -> str | None:
+    """Classify only deterministic false claims with a known functional claim type."""
+    if (
+        finding.verdict != "false"
+        or not getattr(finding, "deterministic", True)
+        or _confidence_rank(finding) == 0
+    ):
+        return None
+    if finding.claim_type in _BREAKING_CLAIMS:
+        return "breaking"
+    if finding.claim_type == "default_value":
+        return "misleading"
+    return None
+
+
+def _confidence_rank(finding: FindingView) -> int:
+    """Use distinct valid evidence records as a disclosed, non-probabilistic confidence rank."""
+    if finding.verdict != "false" or not getattr(finding, "deterministic", True):
+        return 0
+    valid: set[tuple[str, int, str]] = set()
+    for source in finding.evidence:
+        if not isinstance(source, Mapping):
+            continue
+        path, line, snippet = source.get("path"), source.get("line"), source.get("snippet")
+        if (
+            isinstance(path, str)
+            and bool(path)
+            and "\\" not in path
+            and "\x00" not in path
+            and ":" not in path
+            and isinstance(line, int)
+            and not isinstance(line, bool)
+            and line > 0
+            and isinstance(snippet, str)
+            and bool(snippet.strip())
+        ):
+            source_path = PurePosixPath(path)
+            if (
+                not source_path.is_absolute()
+                and str(source_path) == path
+                and not any(part in {".", ".."} for part in source_path.parts)
+            ):
+                valid.add((path, line, snippet))
+    return len(valid)
+
+
+def _finding_sort_key(finding: FindingView) -> tuple[object, ...]:
+    severity = classify_severity(finding) or "unclassified"
+    return (
+        SEVERITY_ORDER[severity],
+        -_confidence_rank(finding),
+        finding.document_path,
+        finding.document_line,
+        finding.claim_text,
+    )
+
+
+def build_pr_summary(findings: Sequence[FindingView]) -> str:
+    """Build the editable PR summary body from persisted findings."""
+    active = sorted(
+        (finding for finding in findings if not getattr(finding, "ignored", False)),
+        key=_finding_sort_key,
+    )
+    ignored = sorted(
+        (finding for finding in findings if getattr(finding, "ignored", False)),
+        key=_finding_sort_key,
+    )
+    counts = Counter(classify_severity(finding) for finding in active)
+    false_count = sum(finding.verdict == "false" for finding in active)
+    lines = [
+        SUMMARY_MARKER,
+        f"## DocDrift found {false_count} confirmed issue(s) across {len(active)} active finding(s)",
+        "",
+        (
+            f"Severity: {counts['breaking']} breaking, {counts['misleading']} misleading, "
+            f"{counts['cosmetic']} cosmetic."
+        ),
+        "",
+        "Findings are ordered by severity, evidence availability, and stable document location.",
+    ]
+    for finding in active:
+        severity = classify_severity(finding)
+        label = severity or "unclassified"
+        verdict = finding.verdict
+        path = _escape_markdown(finding.document_path[:MAX_ANNOTATION_PATH])
+        claim = _escape_markdown(" ".join(finding.claim_text.split())[:500])
+        explanation = _escape_markdown(" ".join(finding.explanation.split())[:500])
+        lines.extend(("", f"- **{label} / {verdict}** `{path}:{finding.document_line}` — {claim}"))
+        if explanation:
+            lines.append(f"  - {explanation}")
+    if ignored:
+        lines.extend(("", f"### Ignored findings ({len(ignored)})"))
+        for finding in ignored:
+            path = _escape_markdown(finding.document_path[:MAX_ANNOTATION_PATH])
+            claim = _escape_markdown(" ".join(finding.claim_text.split())[:500])
+            reason = _escape_markdown(
+                " ".join((getattr(finding, "ignore_reason", None) or "excluded").split())[:500]
+            )
+            lines.append(f"- `{path}:{finding.document_line}` — {claim} ({reason})")
+    body = "\n".join(lines)
+    if len(body) > MAX_SUMMARY_TEXT:
+        body = body[: MAX_SUMMARY_TEXT - 100] + "\n\nAdditional findings are available in the DocDrift Check Run."
+    return body
 
 
 @dataclass(frozen=True, slots=True)
@@ -130,8 +240,14 @@ def _annotation_for(finding: FindingView) -> dict[str, Any] | None:
 
 def build_check_summary(findings: Sequence[FindingView]) -> CheckRunSummary:
     """Summarize only classifications currently emitted by the deterministic core."""
-    active_findings = [finding for finding in findings if not getattr(finding, "ignored", False)]
-    ignored_findings = [finding for finding in findings if getattr(finding, "ignored", False)]
+    active_findings = sorted(
+        (finding for finding in findings if not getattr(finding, "ignored", False)),
+        key=_finding_sort_key,
+    )
+    ignored_findings = sorted(
+        (finding for finding in findings if getattr(finding, "ignored", False)),
+        key=_finding_sort_key,
+    )
     counts = Counter(finding.verdict for finding in active_findings)
     false_count = counts["false"]
     unverifiable_count = counts["unverifiable"]
@@ -145,6 +261,9 @@ def build_check_summary(findings: Sequence[FindingView]) -> CheckRunSummary:
     lines = [
         f"DocDrift analyzed {len(findings)} finding(s) at the pull request head.",
         "",
+        f"- Breaking: {sum(classify_severity(item) == 'breaking' for item in active_findings)}",
+        f"- Misleading: {sum(classify_severity(item) == 'misleading' for item in active_findings)}",
+        f"- Cosmetic: {sum(classify_severity(item) == 'cosmetic' for item in active_findings)}",
         f"- False: {false_count}",
         f"- True: {counts['true']}",
         f"- Unverifiable: {unverifiable_count}",
@@ -301,7 +420,12 @@ class GitHubAppCheckRunPublisher:
             ) from error
 
     async def _installation_token(
-        self, client: httpx.AsyncClient, installation_id: int, repository_id: int
+        self,
+        client: httpx.AsyncClient,
+        installation_id: int,
+        repository_id: int,
+        *,
+        permissions: Mapping[str, str] | None = None,
     ) -> str:
         if (
             isinstance(installation_id, bool)
@@ -317,7 +441,7 @@ class GitHubAppCheckRunPublisher:
             headers={"Authorization": f"Bearer {self._app_jwt()}"},
             json={
                 "repository_ids": [repository_id],
-                "permissions": {"checks": "write"},
+                "permissions": dict(permissions or {"checks": "write"}),
             },
         )
         if response.status_code != 201:
@@ -538,6 +662,118 @@ class GitHubAppCheckRunPublisher:
             url = next_link
             params = {}
         return annotations
+
+    async def publish_summary_comment(
+        self,
+        *,
+        repository: str,
+        repository_id: int,
+        installation_id: int,
+        pull_request_number: int,
+        findings: Sequence[FindingView],
+    ) -> int:
+        """Create or edit the stable DocDrift comment scoped to one repository and PR."""
+        try:
+            owner, name = _validate_repository(repository)
+        except ValueError as error:
+            raise GitHubPublicationError(str(error)) from error
+        if (
+            isinstance(pull_request_number, bool)
+            or not isinstance(pull_request_number, int)
+            or pull_request_number < 1
+        ):
+            raise GitHubPublicationError("Persisted pull request number is invalid.")
+
+        repository_path = f"/repos/{owner}/{name}"
+        comments_path = f"{repository_path}/issues/{pull_request_number}/comments"
+        headers = {
+            "Accept": "application/vnd.github+json",
+            "X-GitHub-Api-Version": "2026-03-10",
+            "User-Agent": "DocDrift",
+        }
+        body = build_pr_summary(findings)
+        async with self.client_factory(
+            base_url=GITHUB_API,
+            timeout=httpx.Timeout(15.0),
+            follow_redirects=False,
+            headers=headers,
+        ) as client:
+            token = await self._installation_token(
+                client,
+                installation_id,
+                repository_id,
+                permissions={"pull_requests": "write"},
+            )
+            client.headers.update({**headers, "Authorization": f"Bearer {token}"})
+            existing_id = await self._find_summary_comment(client, comments_path)
+            if existing_id is None:
+                response = await client.post(comments_path, json={"body": body})
+                expected_status = 201
+                operation = "PR summary comment creation"
+            else:
+                response = await client.patch(
+                    f"{repository_path}/issues/comments/{existing_id}", json={"body": body}
+                )
+                expected_status = 200
+                operation = "PR summary comment update"
+            if response.status_code != expected_status:
+                raise _api_error(response, operation)
+            try:
+                comment_id = response.json().get("id")
+            except (ValueError, AttributeError) as error:
+                raise GitHubPublicationError("GitHub returned an invalid PR comment response.") from error
+            if isinstance(comment_id, bool) or not isinstance(comment_id, int) or comment_id < 1:
+                raise GitHubPublicationError("GitHub returned an invalid PR comment ID.")
+
+        logger.info(
+            "github_pr_summary_published",
+            extra={"repository": repository, "pull_request_number": pull_request_number},
+        )
+        return comment_id
+
+    async def _find_summary_comment(
+        self, client: httpx.AsyncClient, comments_path: str
+    ) -> int | None:
+        """Find our marker only in comments for this exact repository/PR endpoint."""
+        url = f"{GITHUB_API}{comments_path}"
+        params: dict[str, int] = {"per_page": 100}
+        matching_ids: list[int] = []
+        for _ in range(10):
+            response = await client.get(url, params=params)
+            if response.status_code != 200:
+                raise _api_error(response, "PR summary comment lookup")
+            try:
+                comments = response.json()
+            except ValueError as error:
+                raise GitHubPublicationError("GitHub returned an invalid PR comment list.") from error
+            if not isinstance(comments, list):
+                raise GitHubPublicationError("GitHub returned an invalid PR comment list.")
+            for item in comments:
+                if not isinstance(item, Mapping):
+                    continue
+                user = item.get("user")
+                comment_id = item.get("id")
+                if (
+                    isinstance(item.get("body"), str)
+                    and SUMMARY_MARKER in item["body"]
+                    and isinstance(user, Mapping)
+                    and user.get("type") == "Bot"
+                    and isinstance(user.get("login"), str)
+                    and user["login"].endswith("[bot]")
+                    and isinstance(comment_id, int)
+                    and not isinstance(comment_id, bool)
+                    and comment_id > 0
+                ):
+                    matching_ids.append(comment_id)
+            next_link = response.links.get("next", {}).get("url")
+            if not next_link:
+                return max(matching_ids) if matching_ids else None
+            parsed = urlsplit(next_link)
+            if parsed.scheme != "https" or parsed.netloc != "api.github.com":
+                raise GitHubPublicationError("GitHub returned an unsafe pagination URL.")
+            url = next_link
+            params = {}
+        return max(matching_ids) if matching_ids else None
 
     @staticmethod
     def _annotation_key(annotation: Mapping[str, Any]) -> tuple[object, ...]:

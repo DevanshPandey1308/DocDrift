@@ -2,13 +2,14 @@
 
 from __future__ import annotations
 
+import hashlib
 import logging
 from dataclasses import dataclass
 
 import httpx
 from docdrift_api.config import Settings
 from docdrift_api.models import AnalysisFinding, PublicationStatus, Repository, Run, RunStatus
-from sqlalchemy import select
+from sqlalchemy import select, text
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 from sqlalchemy.orm import selectinload
 
@@ -27,6 +28,7 @@ class PublicationInput:
     repository: str
     repository_id: int | None
     installation_id: int | None
+    pull_request_number: int
     head_sha: str
     check_run_id: int | None
     findings: tuple[AnalysisFinding, ...]
@@ -78,6 +80,7 @@ async def _prepare_publication(
                 if repository.installation is not None
                 else None
             ),
+            pull_request_number=run.pull_request_number,
             head_sha=run.head_sha,
             check_run_id=run.github_check_run_id,
             findings=tuple(run.findings),
@@ -99,6 +102,54 @@ async def _set_publication_status(
         if check_run_id is not None:
             run.github_check_run_id = check_run_id
         await session.flush()
+
+
+async def _publish_latest_summary(
+    session_factory: async_sessionmaker[AsyncSession],
+    prepared: PublicationInput,
+    publisher: CheckRunPublisher,
+) -> str:
+    """Serialize one PR's comment updates and skip a run once a newer head exists."""
+    publish_summary = getattr(publisher, "publish_summary_comment", None)
+    if publish_summary is None:
+        return "unsupported"
+    if prepared.repository_id is None or prepared.installation_id is None:
+        return "unavailable"
+
+    lock_digest = hashlib.sha256(
+        f"{prepared.repository_id}:{prepared.pull_request_number}".encode("ascii")
+    ).digest()[:8]
+    lock_key = int.from_bytes(lock_digest, byteorder="big", signed=True)
+    async with session_factory() as session, session.begin():
+        # The transaction-scoped PostgreSQL advisory lock serializes workers even when
+        # webhook redelivery creates overlapping publication attempts.
+        await session.execute(text("SELECT pg_advisory_xact_lock(:lock_key)"), {"lock_key": lock_key})
+        run = await session.scalar(select(Run).where(Run.id == prepared.run_id).with_for_update())
+        if run is None or run.status != RunStatus.COMPLETED:
+            return "stale"
+        newer_run = await session.scalar(
+            select(Run.id)
+            .where(
+                Run.repository_id == run.repository_id,
+                Run.pull_request_number == run.pull_request_number,
+                Run.id > run.id,
+            )
+            .limit(1)
+        )
+        if newer_run is not None:
+            return "stale"
+        comment_id = await publish_summary(
+            repository=prepared.repository,
+            repository_id=prepared.repository_id,
+            installation_id=prepared.installation_id,
+            pull_request_number=prepared.pull_request_number,
+            findings=prepared.findings,
+        )
+        logger.info(
+            "github_pr_summary_updated",
+            extra={"run_id": prepared.run_id, "comment_id": comment_id},
+        )
+        return "published"
 
 
 async def publish_completed_run(
@@ -146,6 +197,7 @@ async def publish_completed_run(
             findings=prepared.findings,
             check_run_id=prepared.check_run_id,
         )
+        await _publish_latest_summary(session_factory, prepared, publisher)
     except GitHubPublicationError:
         await _set_publication_status(session_factory, run_id, PublicationStatus.FAILED)
         raise
