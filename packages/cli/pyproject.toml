@@ -1,0 +1,15 @@
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "docdrift-cli"
+version = "0.1.0"
+requires-python = ">=3.12"
+dependencies = ["docdrift-core==0.1.0"]
+
+[project.scripts]
+docdrift = "docdrift_cli.main:main"
+
+[tool.setuptools.packages.find]
+where = ["src"]
