@@ -8,9 +8,10 @@ from typing import Self
 from unittest.mock import AsyncMock, patch
 
 from docdrift_api.models import RunStatus
+from docdrift_core.models import Claim, ClaimType, Finding, Verdict
 from docdrift_worker import worker
 from docdrift_worker.checkout import GitHubRepositoryCheckout
-from docdrift_worker.pipeline import run_analysis_pipeline
+from docdrift_worker.pipeline import _finding_record, run_analysis_pipeline
 from git_helpers import create_git_repository
 from sqlalchemy.sql.dml import Update
 
@@ -77,6 +78,26 @@ def make_run() -> SimpleNamespace:
 
 
 class AnalysisPipelineTests(unittest.IsolatedAsyncioTestCase):
+    def test_finding_exclusion_is_retained_as_persisted_metadata(self) -> None:
+        claim = Claim(
+            id="0123456789abcdef",
+            type=ClaimType.FILE_PATH,
+            subject="missing.py",
+            expected={},
+            text="See `missing.py`.",
+            document_path="docs/guide.md",
+            line=2,
+            span_start=4,
+            span_end=16,
+        )
+        finding = Finding(claim, Verdict.FALSE, "Missing file.", (), "check_path")
+
+        record = _finding_record(7, finding, "Reviewed generated page")
+
+        self.assertTrue(record.ignored)
+        self.assertEqual(record.ignore_reason, "Reviewed generated page")
+        self.assertEqual(record.verdict, Verdict.FALSE.value)
+
     async def test_worker_checks_out_pinned_head_analyzes_and_persists_evidence(self) -> None:
         with tempfile.TemporaryDirectory() as temporary:
             temporary_path = Path(temporary)

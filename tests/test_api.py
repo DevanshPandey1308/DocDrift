@@ -136,6 +136,10 @@ class ApiTests(unittest.TestCase):
             },
         )
         persist.assert_awaited_once()
+        self.assertEqual(
+            persist.await_args.kwargs["pull_request"].base_sha,
+            "b" * 40,
+        )
         self.assertEqual(queue.enqueued, [("process_run", 19, run_job_id(19))])
 
     def test_duplicate_delivery_returns_consistent_duplicate_response(self) -> None:
@@ -292,7 +296,8 @@ class ApiTests(unittest.TestCase):
         return (
             b'{"action":"opened","installation":{"id":7},'
             b'"repository":{"id":42,"full_name":"docdrift/example"},'
-            b'"pull_request":{"number":3,"head":{"sha":"abc123"}}}'
+            b'"pull_request":{"number":3,"head":{"sha":"abc123"},'
+            b'"base":{"sha":"bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"}}}'
         )
 
     def test_invalid_signature_is_rejected_without_disclosing_secret(self) -> None:

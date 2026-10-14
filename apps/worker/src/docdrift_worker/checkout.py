@@ -9,7 +9,7 @@ import shutil
 import tempfile
 from collections.abc import AsyncIterator, Callable
 from contextlib import asynccontextmanager
-from pathlib import Path
+from pathlib import Path, PurePosixPath
 
 _REPOSITORY_COMPONENT = re.compile(r"^[A-Za-z0-9][A-Za-z0-9_.-]{0,99}$")
 _COMMIT_SHA = re.compile(r"^[0-9a-fA-F]{40}$")
@@ -21,6 +21,66 @@ class RepositoryCheckoutError(RuntimeError):
 
 class CheckoutTimeoutError(TimeoutError):
     """A bounded Git command exceeded its configured timeout."""
+
+
+async def changed_python_paths(
+    repository_path: Path, base_sha: str | None, head_sha: str
+) -> tuple[str, ...] | None:
+    """Return addition-only Python paths; otherwise require the full-scan fallback.
+
+    Any deletion, modified old line, non-Python file, malformed diff, or unavailable base
+    makes the impact map incomplete and returns ``None``.
+    """
+    if (
+        not isinstance(base_sha, str)
+        or not _COMMIT_SHA.fullmatch(base_sha)
+        or not isinstance(head_sha, str)
+        or not _COMMIT_SHA.fullmatch(head_sha)
+    ):
+        return None
+    git = shutil.which("git")
+    if git is None:
+        return None
+    try:
+        output = await _run_command(
+            git,
+            [
+                "-c",
+                "core.quotepath=false",
+                "-C",
+                str(repository_path),
+                "diff",
+                "--numstat",
+                "--no-renames",
+                base_sha.lower(),
+                head_sha.lower(),
+                "--",
+            ],
+            cwd=repository_path,
+            timeout_seconds=15.0,
+        )
+    except (RepositoryCheckoutError, CheckoutTimeoutError, OSError):
+        return None
+
+    paths: list[str] = []
+    for line in output.splitlines():
+        fields = line.split("\t", 2)
+        if len(fields) != 3:
+            return None
+        additions, deletions, path = fields
+        if (
+            not additions.isdecimal()
+            or deletions != "0"
+            or not path.endswith(".py")
+            or "\\" in path
+            or "\x00" in path
+        ):
+            return None
+        parsed = PurePosixPath(path)
+        if parsed.is_absolute() or any(part in {".", ".."} for part in parsed.parts):
+            return None
+        paths.append(path)
+    return tuple(sorted(set(paths))) if paths else None
 
 
 def github_repository_url(full_name: str) -> str:
@@ -119,6 +179,7 @@ class GitHubRepositoryCheckout:
         repository_full_name: str,
         pull_request_number: int,
         head_sha: str,
+        base_sha: str | None = None,
     ) -> AsyncIterator[Path]:
         """Yield a temporary checkout whose detached HEAD matches ``head_sha``."""
         # Always validate identity before calling an injected resolver.
@@ -131,6 +192,10 @@ class GitHubRepositoryCheckout:
             raise ValueError("Pull request number must be a positive integer.")
         if not isinstance(head_sha, str) or not _COMMIT_SHA.fullmatch(head_sha):
             raise ValueError("Pull request head revision must be a 40-character commit SHA.")
+        if base_sha is not None and (
+            not isinstance(base_sha, str) or not _COMMIT_SHA.fullmatch(base_sha)
+        ):
+            raise ValueError("Pull request base revision must be a 40-character commit SHA.")
         expected_origin = github_repository_url(repository_full_name)
         origin = self.remote_url_factory(repository_full_name)
         local_origin = Path(origin).is_dir()
@@ -194,6 +259,15 @@ class GitHubRepositoryCheckout:
                     await run(
                         "fetch", "--quiet", "--no-tags", "--depth=1", "origin", head_sha.lower()
                     )
+                if base_sha is not None:
+                    try:
+                        await run(
+                            "fetch", "--quiet", "--no-tags", "--depth=1", "origin", base_sha.lower()
+                        )
+                    except (RepositoryCheckoutError, CheckoutTimeoutError):
+                        # A base fetch is only needed for impact selection. If unavailable,
+                        # changed_python_paths will request a conservative full scan.
+                        pass
             await run("checkout", "--quiet", "--force", "--detach", head_sha.lower())
             checked_out_sha = await run("rev-parse", "HEAD^{commit}")
             if checked_out_sha.lower() != head_sha.lower():

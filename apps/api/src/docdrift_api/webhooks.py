@@ -9,12 +9,12 @@ import logging
 import re
 from typing import Any, Literal, NoReturn
 
+from arq.connections import ArqRedis
 from fastapi import APIRouter, Request
 from fastapi.responses import JSONResponse
 from pydantic import BaseModel
 from sqlalchemy.exc import SQLAlchemyError
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
-from arq.connections import ArqRedis
 
 from .config import Settings
 from .persistence import PersistenceResult, PullRequestRecord, persist_pull_request
@@ -98,6 +98,13 @@ def _pull_request_record(payload: dict[str, Any]) -> PullRequestRecord:
     )
     pull_request_number = _positive_integer(pull_request.get("number"), "pull_request.number")
     head_sha = _required_text(head.get("sha"), "pull_request.head.sha", 128)
+    base_sha: str | None = None
+    base_value = pull_request.get("base")
+    if base_value is not None:
+        base = _required_object(base_value, "pull_request.base")
+        base_sha = _required_text(base.get("sha"), "pull_request.base.sha", 128)
+        if not re.fullmatch(r"[0-9a-fA-F]{40}", base_sha):
+            raise PayloadValidationError("pull_request.base.sha must be a 40-character commit SHA.")
 
     installation_id: int | None = None
     installation_value = payload.get("installation")
@@ -114,6 +121,7 @@ def _pull_request_record(payload: dict[str, Any]) -> PullRequestRecord:
         installation_id=installation_id,
         pull_request_number=pull_request_number,
         head_sha=head_sha,
+        base_sha=base_sha,
     )
 
 

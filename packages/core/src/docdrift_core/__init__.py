@@ -1,8 +1,8 @@
 """DocDrift deterministic analysis core."""
 
-from .analysis import analyze, build_impact_index
+from .analysis import analyze, build_impact_index, select_impacted_claims
 from .extract import extract_markdown
 from .index import build_index
 from .models import AnalysisError, Claim, ClaimType, Evidence, Finding, Verdict
 
-__all__ = ["AnalysisError", "Claim", "ClaimType", "Evidence", "Finding", "Verdict", "analyze", "build_impact_index", "build_index", "extract_markdown"]
+__all__ = ["AnalysisError", "Claim", "ClaimType", "Evidence", "Finding", "Verdict", "analyze", "build_impact_index", "build_index", "extract_markdown", "select_impacted_claims"]

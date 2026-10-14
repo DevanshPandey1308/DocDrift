@@ -18,6 +18,7 @@ class PullRequestRecord:
     installation_id: int | None
     pull_request_number: int
     head_sha: str
+    base_sha: str | None = None
 
 
 @dataclass(frozen=True)
@@ -129,6 +130,7 @@ async def persist_pull_request(
                 repository_id=repository_id,
                 pull_request_number=pull_request.pull_request_number,
                 head_sha=pull_request.head_sha,
+                base_sha=pull_request.base_sha,
                 status=RunStatus.PENDING,
             )
             .on_conflict_do_nothing(
@@ -145,5 +147,11 @@ async def persist_pull_request(
         )
         if run_id is None:
             raise RuntimeError("Pull-request run upsert did not return a run.")
+        if pull_request.base_sha is not None:
+            await session.execute(
+                update(Run)
+                .where(Run.id == run_id, Run.base_sha.is_(None))
+                .values(base_sha=pull_request.base_sha)
+            )
 
     return PersistenceResult(duplicate_delivery=False, run_id=run_id)

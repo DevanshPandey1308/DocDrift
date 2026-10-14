@@ -15,7 +15,8 @@ from sqlalchemy import delete, select
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 from sqlalchemy.orm import selectinload
 
-from .checkout import GitHubRepositoryCheckout, RepositoryCheckoutError
+from .checkout import GitHubRepositoryCheckout, RepositoryCheckoutError, changed_python_paths
+from .noise import FindingExclusions, RepositoryConfigError, load_finding_exclusions
 
 logger = logging.getLogger(__name__)
 CORE_ANALYSIS_TIMEOUT_SECONDS = 25.0
@@ -31,6 +32,7 @@ class RunIdentity:
     repository_full_name: str
     pull_request_number: int
     head_sha: str
+    base_sha: str | None
 
 
 async def _claim_run(
@@ -68,12 +70,15 @@ async def _claim_run(
                 repository_full_name=run.repository.full_name,
                 pull_request_number=run.pull_request_number,
                 head_sha=run.head_sha,
+                base_sha=getattr(run, "base_sha", None),
             ),
             RunStatus.RUNNING.value,
         )
 
 
-def _finding_record(run_id: int, finding: Finding) -> AnalysisFinding:
+def _finding_record(
+    run_id: int, finding: Finding, ignore_reason: str | None = None
+) -> AnalysisFinding:
     """Convert the shared core result without changing its verdict or evidence."""
     try:
         expected = json.loads(json.dumps(finding.claim.expected, ensure_ascii=False))
@@ -101,6 +106,8 @@ def _finding_record(run_id: int, finding: Finding) -> AnalysisFinding:
         verification_method=finding.verification_method,
         deterministic=finding.deterministic,
         evidence=evidence,
+        ignored=ignore_reason is not None,
+        ignore_reason=ignore_reason,
     )
 
 
@@ -149,10 +156,12 @@ def _decode_findings(stdout: bytes) -> list[Finding]:
         raise AnalysisExecutionError("Deterministic analysis returned invalid output.") from error
 
 
-async def _analyze_repository(repository_root: Path) -> list[Finding]:
+async def _analyze_repository(
+    repository_root: Path, changed_paths: tuple[str, ...] | None = None
+) -> list[Finding]:
     """Run the existing deterministic CLI in a killable, bounded subprocess."""
     try:
-        process = await asyncio.create_subprocess_exec(
+        arguments = [
             sys.executable,
             "-I",
             "-m",
@@ -162,6 +171,11 @@ async def _analyze_repository(repository_root: Path) -> list[Finding]:
             str(repository_root),
             "--format",
             "json",
+        ]
+        for changed_path in changed_paths or ():
+            arguments.append(f"--changed-path={changed_path}")
+        process = await asyncio.create_subprocess_exec(
+            *arguments,
             cwd=repository_root,
             stdout=asyncio.subprocess.PIPE,
             stderr=asyncio.subprocess.PIPE,
@@ -190,10 +204,22 @@ async def _analyze_repository(repository_root: Path) -> list[Finding]:
 
 
 async def _persist_findings_and_complete(
-    session_factory: async_sessionmaker[AsyncSession], run_id: int, findings: list[Finding]
+    session_factory: async_sessionmaker[AsyncSession],
+    run_id: int,
+    findings: list[Finding],
+    exclusions: FindingExclusions | None = None,
 ) -> str:
     """Replace results and mark the run complete atomically, only while it is active."""
-    records = [_finding_record(run_id, finding) for finding in findings]
+    records = [
+        _finding_record(
+            run_id,
+            finding,
+            (exclusions or FindingExclusions()).reason_for(
+                finding.claim.id, finding.claim.document_path
+            ),
+        )
+        for finding in findings
+    ]
     async with session_factory() as session, session.begin():
         run = await session.scalar(select(Run).where(Run.id == run_id).with_for_update())
         if run is None:
@@ -213,11 +239,7 @@ async def run_analysis_pipeline(
     *,
     checkout_component: GitHubRepositoryCheckout | None = None,
 ) -> str:
-    """Check out the recorded PR head, fully scan supported docs, and persist results.
-
-    Full documentation scans are used because the current core does not expose a
-    reliable PR-diff-to-claim impact map.
-    """
+    """Analyze impacted claims when exact mapping is safe; otherwise keep the full scan."""
     identity, state = await _claim_run(session_factory, run_id)
     if identity is None:
         return state
@@ -233,13 +255,21 @@ async def run_analysis_pipeline(
             identity.repository_full_name,
             identity.pull_request_number,
             identity.head_sha,
+            base_sha=identity.base_sha,
         ) as repository_root:
-            findings = await _analyze_repository(Path(repository_root))
+            root = Path(repository_root)
+            changed_paths = await changed_python_paths(
+                root, identity.base_sha, identity.head_sha
+            )
+            findings = await _analyze_repository(root, changed_paths)
+            exclusions = load_finding_exclusions(root)
     except RepositoryCheckoutError:
         raise
     except AnalysisExecutionError:
         raise
+    except RepositoryConfigError as error:
+        raise AnalysisExecutionError(str(error)) from error
     except (OSError, UnicodeError, ValueError) as error:
         raise AnalysisExecutionError("Deterministic analysis could not read the checked-out repository.") from error
 
-    return await _persist_findings_and_complete(session_factory, run_id, findings)
+    return await _persist_findings_and_complete(session_factory, run_id, findings, exclusions)

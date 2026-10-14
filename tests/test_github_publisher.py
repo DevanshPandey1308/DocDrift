@@ -26,6 +26,8 @@ class FakeFinding:
     evidence: tuple[dict[str, object], ...] = (
         {"path": "src/settings.py", "line": 12, "snippet": "timeout = 60"},
     )
+    ignored: bool = False
+    ignore_reason: str | None = None
 
 
 class FakeGitHubAPI:
@@ -116,6 +118,18 @@ class CheckRunSummaryTests(unittest.TestCase):
         self.assertEqual(
             build_check_summary([FakeFinding(verdict="unverifiable")]).conclusion, "neutral"
         )
+
+    def test_ignored_findings_are_transparent_and_do_not_hide_active_failures(self) -> None:
+        ignored = FakeFinding(ignored=True, ignore_reason="Known generated page")
+        ignored_only = build_check_summary([ignored])
+        self.assertEqual(ignored_only.conclusion, "neutral")
+        self.assertIn("Ignored by repository configuration: 1", ignored_only.text)
+        self.assertIn("Known generated page", ignored_only.text)
+        self.assertEqual(ignored_only.annotations, ())
+
+        mixed = build_check_summary([ignored, FakeFinding()])
+        self.assertEqual(mixed.conclusion, "failure")
+        self.assertEqual(len(mixed.annotations), 1)
 
 
 class CheckRunPublisherTests(unittest.IsolatedAsyncioTestCase):

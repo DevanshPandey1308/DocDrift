@@ -62,7 +62,7 @@ class CheckRunSummary:
 
 def _annotation_for(finding: FindingView) -> dict[str, Any] | None:
     """Return a GitHub-safe annotation at the documentation claim location."""
-    if finding.verdict != "false":
+    if finding.verdict != "false" or getattr(finding, "ignored", False):
         return None
 
     def valid_path(path: object) -> bool:
@@ -130,12 +130,14 @@ def _annotation_for(finding: FindingView) -> dict[str, Any] | None:
 
 def build_check_summary(findings: Sequence[FindingView]) -> CheckRunSummary:
     """Summarize only classifications currently emitted by the deterministic core."""
-    counts = Counter(finding.verdict for finding in findings)
+    active_findings = [finding for finding in findings if not getattr(finding, "ignored", False)]
+    ignored_findings = [finding for finding in findings if getattr(finding, "ignored", False)]
+    counts = Counter(finding.verdict for finding in active_findings)
     false_count = counts["false"]
     unverifiable_count = counts["unverifiable"]
     if false_count:
         conclusion = "failure"
-    elif unverifiable_count:
+    elif unverifiable_count or ignored_findings:
         conclusion = "neutral"
     else:
         conclusion = "success"
@@ -146,10 +148,11 @@ def build_check_summary(findings: Sequence[FindingView]) -> CheckRunSummary:
         f"- False: {false_count}",
         f"- True: {counts['true']}",
         f"- Unverifiable: {unverifiable_count}",
+        f"- Ignored by repository configuration: {len(ignored_findings)}",
     ]
     valid: list[dict[str, Any]] = []
     unannotated: list[FindingView] = []
-    for finding in findings:
+    for finding in active_findings:
         annotation = _annotation_for(finding)
         if annotation is not None and len(valid) < MAX_ANNOTATIONS:
             valid.append(annotation)
@@ -181,6 +184,26 @@ def build_check_summary(findings: Sequence[FindingView]) -> CheckRunSummary:
         if hidden:
             lines.append(
                 f"{hidden} additional finding(s) omitted to fit GitHub's summary size limit."
+            )
+    if ignored_findings:
+        lines.extend(("", "Ignored findings (retained for transparency):"))
+        summary_length = sum(len(line) + 1 for line in lines)
+        hidden_ignored = 0
+        for finding in ignored_findings:
+            document_path = _escape_markdown(finding.document_path[:MAX_ANNOTATION_PATH])
+            claim = _escape_markdown(" ".join(finding.claim_text.split())[:500])
+            reason = _escape_markdown(
+                " ".join((getattr(finding, "ignore_reason", None) or "excluded").split())[:500]
+            )
+            entry = f"- `{document_path}:{finding.document_line}`: {claim} — {reason}"
+            if summary_length + len(entry) + 1 > MAX_SUMMARY_TEXT:
+                hidden_ignored += 1
+                continue
+            lines.append(entry)
+            summary_length += len(entry) + 1
+        if hidden_ignored:
+            lines.append(
+                f"{hidden_ignored} ignored finding(s) omitted to fit GitHub's summary size limit."
             )
     return CheckRunSummary(
         title="DocDrift deterministic analysis",

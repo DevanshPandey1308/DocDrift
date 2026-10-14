@@ -98,6 +98,7 @@ class Run(TimestampMixin, Base):
     )
     pull_request_number: Mapped[int] = mapped_column(Integer, nullable=False)
     head_sha: Mapped[str] = mapped_column(String(128), nullable=False)
+    base_sha: Mapped[str | None] = mapped_column(String(128), nullable=True)
     status: Mapped[RunStatus] = mapped_column(
         Enum(RunStatus, name="run_status", values_callable=lambda enum: [item.value for item in enum]),
         nullable=False,
@@ -145,6 +146,8 @@ class AnalysisFinding(TimestampMixin, Base):
     explanation: Mapped[str] = mapped_column(Text, nullable=False)
     verification_method: Mapped[str] = mapped_column(String(128), nullable=False)
     deterministic: Mapped[bool] = mapped_column(Boolean, nullable=False)
+    ignored: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False, server_default="false")
+    ignore_reason: Mapped[str | None] = mapped_column(Text, nullable=True)
     evidence: Mapped[list[dict[str, object]]] = mapped_column(
         JSON().with_variant(JSONB(), "postgresql"), nullable=False
     )

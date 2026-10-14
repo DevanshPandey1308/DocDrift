@@ -8,7 +8,7 @@ DocDrift is a local, evidence-driven detector for a narrow set of documentation 
 - Static Python indexing for functions, parameter kinds and literal defaults, common `argparse`, Click, and Typer declarations, FastAPI/Flask route decorators, and literal environment-variable reads.
 - Checks for function parameter names, defaults, recognized CLI flags and routes, environment-variable reads, repository-relative file paths, and a narrow Python version metadata form.
 - Structured findings with stable verdict strings, document locations, actual source snippets, and syntax/read errors.
-- Exact-name impact index available to later incremental-analysis adapters.
+- Exact-name impact index for selecting claims linked to changed, statically indexed Python symbols.
 
 Unsupported patterns are skipped by extraction. Recognized but ambiguous patterns abstain as `unverifiable`. A positive environment-variable finding proves only that a recognized read exists; it does not establish that the variable is required or describe runtime behavior.
 
@@ -105,11 +105,27 @@ Responses are `202` only after the delivery and run are persisted and the job is
 
 The worker fetches the persisted 40-character PR head SHA from a URL constructed only for `github.com/{owner}/{repo}.git`, checks out that exact commit detached, and runs the deterministic `docdrift_core` scan. Git operations have bounded timeouts, use a temporary checkout that is removed after processing, disable interactive credential helpers and redirects, and never execute repository code. Only public GitHub repositories are currently supported for checkout; private-repository installation-token authentication for cloning is not implemented.
 
-The core does not yet provide reliable diff-to-symbol impact mapping, so each run scans all supported Markdown and Python files using the existing core defaults. Findings, claim/document locations, checker methods, and source evidence are replaced transactionally for that run before it is marked `completed`; retrying an active run cannot append duplicate results.
+PR runs retain the webhook's base SHA when available. The worker maps addition-only Python diffs to exact indexed function, default, flag, environment-variable, and route claims. It falls back to the full deterministic scan when the base is unavailable, old lines are deleted or modified, documentation or unsupported files change, source paths are not indexed, or no exact claim mapping is found. This conservative fallback keeps uncertain impact from omitting findings. Findings are replaced transactionally before a run is marked `completed`.
+
+Repositories may add a safe, versioned `.docdrift.yml` to exclude known noise. The supported subset is:
+
+```yaml
+version: 1
+docs:
+  exclude:
+    - "docs/changelog.md"
+    - "docs/legacy/**"
+findings:
+  ignore:
+    - claim_id: "0123456789abcdef"
+      reason: "Generated reference page; reviewed separately."
+```
+
+`docs.exclude` uses repository-relative glob patterns. `findings.ignore` matches an exact stable claim ID and requires a reason. The parser accepts the documented two-space block lists and JSON-style double-quoted flow lists; it rejects other YAML constructs, unknown keys, malformed input, absolute or parent-traversing paths, duplicate keys, and unsupported versions rather than silently disabling configuration. This strict subset has no tags, aliases, or executable YAML features. Excluded findings are retained in persistence with their reason. The Check Run shows them separately, omits their annotations and active verdict counts, and concludes `neutral` when exclusions are the only otherwise-clean result; any remaining false finding still concludes `failure`.
 
 For GitHub Check Runs, create a GitHub App and install it on each target repository. Grant the app `Checks: Read and write` (the publisher requests only `checks: write` on its short-lived installation token); GitHub's default `Metadata: Read-only` permission is also required. The webhook's installation ID and repository ID scope a fresh installation token to that repository for each publication attempt. Set `DOCDRIFT_GITHUB_APP_ID` and `DOCDRIFT_GITHUB_APP_PRIVATE_KEY` in the worker environment. Without this configuration, analysis still completes and persists normally, while the separate run publication status becomes `failed` with a safe configuration diagnostic. No private key or token is logged or stored.
 
-Each completed run creates or updates a Check Run for its exact analyzed head SHA, using a stable run-and-SHA external ID to find/reuse the same Check Run on retries. Before retrying annotation batches, the worker reads the Check Run's existing annotations and sends only missing ones. The summary counts the core's `true`, `false`, and `unverifiable` verdicts: false findings conclude `failure`, only unverifiable findings conclude `neutral`, and a clean scan concludes `success`. False findings with safe repository-relative documentation paths and valid line numbers receive annotations, sent in batches of at most 50; findings that cannot be annotated remain represented in the summary. Publishing has a separate persisted status and bounded retry handling, so GitHub failures do not change a completed analysis to failed. Older PR runs are skipped after a newer run exists. This phase publishes no review comments, suggestions, follow-up PRs, LLM results, or fixes. The health endpoint reports API health only and does not claim GitHub or Redis health. Unit tests use local Git repositories and mocked GitHub responses without external GitHub requests. Optional PostgreSQL integration tests use `DOCDRIFT_TEST_DATABASE_URL`; migrate a dedicated test database before running them.
+Each completed run creates or updates a Check Run for its exact analyzed head SHA, using a stable run-and-SHA external ID to find/reuse the same Check Run on retries. Before retrying annotation batches, the worker reads the Check Run's existing annotations and sends only missing ones. Active false findings conclude `failure`; active unverifiable findings or exclusions with no active false findings conclude `neutral`; a clean scan concludes `success`. False findings with safe repository-relative documentation paths and valid line numbers receive annotations, sent in batches of at most 50; ignored findings do not receive annotations and remain visible in the summary. Publishing has a separate persisted status and bounded retry handling, so GitHub failures do not change a completed analysis to failed. Older PR runs are skipped after a newer run exists. This phase publishes no review comments, suggestions, follow-up PRs, LLM results, or fixes. The health endpoint reports API health only and does not claim GitHub or Redis health. Unit tests use local Git repositories and mocked GitHub responses without external GitHub requests. Optional PostgreSQL integration tests use `DOCDRIFT_TEST_DATABASE_URL`; migrate a dedicated test database before running them.
 
 Example text finding:
 
@@ -144,6 +160,6 @@ Optional development tools are pytest, Ruff, and mypy. Their configuration is in
 
 The dependency direction is CLI adapter → core. The core has no CLI, web, GitHub, or infrastructure dependencies. Source indexing uses `ast.parse` and safe literal parsing only. Paths are resolved within the repository root. No source code or documentation examples are executed.
 
-Current limitations include a limited Markdown grammar, top-level/module-name ambiguity for same-named functions, literal-only static resolution, `argparse`-focused CLI recognition, and no general Python version range parser. Click and Typer declarations, overloaded/dynamic semantics, arbitrary prose, Git diffs, and automatic fixes are not yet supported. No benchmark performance claim has been made.
+Current limitations include a limited Markdown grammar, top-level/module-name ambiguity for same-named functions, literal-only static resolution, `argparse`-focused CLI recognition, and no general Python version range parser. Impact selection currently uses exact static names and narrows only addition-only Python diffs; other changes use a full scan. The `.docdrift.yml` support is intentionally limited to document path exclusions and exact claim-ID ignores. Click and Typer declarations, overloaded/dynamic semantics, arbitrary prose, semantic impact retrieval, and automatic fixes are not yet supported. No benchmark performance claim has been made.
 
 Future milestones may add broader checker coverage, changed-symbol selection using Git diffs, a reproducible benchmark, and hosted adapters. They are not implemented in this phase.
