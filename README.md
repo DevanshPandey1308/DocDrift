@@ -22,7 +22,7 @@ Requires Python 3.12 or newer. From the repository root, install the two local p
 python -m pip install -e .\packages\core -e .\packages\cli
 ```
 
-For development checks, install `.[dev]` from the root with `python -m pip install -e ".[dev]"`. The core and CLI runtime have no third-party dependencies. `docdrift.py` is a source-checkout launcher that works without installation.
+For core and CLI development checks, install `.[dev]` from the root with `python -m pip install -e ".[dev]"`. For API development and the full test suite, install `.[api,dev]` as described in [API foundation](#api-foundation). The core and CLI runtime have no third-party dependencies. `docdrift.py` is a source-checkout launcher that works without installation.
 
 ## CLI
 
@@ -33,6 +33,28 @@ python .\docdrift.py check --repo . --docs docs --source packages
 ```
 
 Repeat `--docs` or `--source` to configure several scopes. Defaults scan the repository root. JSON output has `schema_version`, `findings`, and `errors`; model fields are stable and enum values are lowercase strings.
+
+## API foundation
+
+Install the API and development dependencies from the repository root:
+
+```powershell
+python -m pip install -e ".[api,dev]"
+```
+
+The API supports `DOCDRIFT_API_TITLE` (default `DocDrift API`) and `DOCDRIFT_API_VERSION` (default `0.1.0`). Start the local server with:
+
+```powershell
+uvicorn docdrift_api.main:app --reload
+```
+
+The foundation currently provides `GET /health`, returning JSON with `status`, `service`, and `version`. Check it while the server is running:
+
+```powershell
+Invoke-RestMethod http://127.0.0.1:8000/health
+```
+
+API tests use an in-process ASGI harness and make no network calls. The API is only an HTTP adapter at this stage; webhook processing, persistence, and background jobs are not implemented.
 
 Example text finding:
 
@@ -54,10 +76,10 @@ Syntax errors are included in JSON and printed to stderr in text mode. They prod
 
 ## Tests and quality checks
 
-Run the standard-library test suite with:
+Run the full test suite after installing `.[api,dev]` with:
 
 ```powershell
-$env:PYTHONPATH = "packages/core/src;packages/cli/src"
+$env:PYTHONPATH = "apps/api/src;packages/core/src;packages/cli/src"
 python -m unittest discover -s tests -v
 ```
 
