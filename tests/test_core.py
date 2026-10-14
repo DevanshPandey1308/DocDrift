@@ -45,6 +45,43 @@ class CoreTests(unittest.TestCase):
             self.assertEqual(findings[0].verdict, Verdict.UNVERIFIABLE)
             self.assertEqual(findings[1].verdict, Verdict.FALSE)
 
+    def test_tutorial_file_instructions_are_not_path_claims(self) -> None:
+        with tempfile.TemporaryDirectory(dir=Path(__file__).parent) as directory:
+            root = Path(directory)
+            (root / "docs").mkdir()
+            (root / "config").mkdir()
+            (root / "config/settings.py").write_text("SETTING = True\n")
+            (root / "docs/guide.md").write_text(
+                "Create a file `main.py` with:\n"
+                "Create a file `main.py`:\n"
+                "Create a `main.py` file with:\n"
+                "Now create a `main.py` with:\n"
+                "Create another file/module `app/test_main.py`.\n"
+                "Copy that to a file `main.py`.\n"
+                "Copy that example from above to a file `main.py`.\n"
+                "To run any of the examples, copy the code to a file `main.py`, and run it:\n"
+                "To run any of the examples, copy the code to a file `main.py`, and start `fastapi dev` with `uv run`:\n"
+                "Now let's start using Typer in your own code, update `main.py` with:\n"
+                "Modify the file `main.py`.\n"
+                "Now modify the file `main.py` to receive a request body.\n"
+                "And then update your `config.py` with:\n"
+                "Now you could create a demo file on the same Typer directory in your editor, for example `demo.py`:\n"
+                "Then you can write a template at `templates/item.html` with, for example:\n"
+                "Here's what we do in `main.py`:\n"
+                "The file would live right beside `__init__.py` and `main.py`:\n"
+                "Finally, we need to create an `__init__.py` file in the `users` directory to make it a package.\n"
+                "Let's start with a file `tutorial.py`:\n"
+                "And now the equivalent for managing towns in `towns.py`:\n"
+                "Now let's put the commands together in `combined.py`:\n"
+                "But to achieve that, we just have to add the module to the same `main.py` file we already had:\n"
+                "The example is implemented in `missing_module.py`.\n"
+                "The configuration is stored in `config/settings.py`.\n"
+                "See `missing_module.py` for the implementation.\n"
+            )
+            findings, _, claims = analyze(root, ("docs",), (".",))
+            self.assertEqual([claim.subject for claim in claims], ["missing_module.py", "config/settings.py", "missing_module.py"])
+            self.assertEqual([finding.verdict for finding in findings], [Verdict.FALSE, Verdict.TRUE, Verdict.FALSE])
+
     def test_syntax_errors_are_structured_and_missing_scope_is_error(self) -> None:
         with tempfile.TemporaryDirectory(dir=Path(__file__).parent) as directory:
             root = Path(directory)
