@@ -42,19 +42,42 @@ Install the API and development dependencies from the repository root:
 python -m pip install -e ".[api,dev]"
 ```
 
-The API supports `DOCDRIFT_API_TITLE` (default `DocDrift API`) and `DOCDRIFT_API_VERSION` (default `0.1.0`). Start the local server with:
+The API supports `DOCDRIFT_API_TITLE` (default `DocDrift API`), `DOCDRIFT_API_VERSION` (default `0.1.0`), and `DOCDRIFT_GITHUB_WEBHOOK_SECRET` (unset by default). Set a random, process-local development secret before starting the server; this PowerShell command does not write it to the repository:
+
+```powershell
+$env:DOCDRIFT_GITHUB_WEBHOOK_SECRET = [Convert]::ToHexString([Security.Cryptography.RandomNumberGenerator]::GetBytes(32))
+```
+
+Start the local server with:
 
 ```powershell
 uvicorn docdrift_api.main:app --reload
 ```
 
-The foundation currently provides `GET /health`, returning JSON with `status`, `service`, and `version`. Check it while the server is running:
+`GET /health` returns JSON with `status`, `service`, and `version` and does not require a webhook secret. Check it while the server is running:
 
 ```powershell
 Invoke-RestMethod http://127.0.0.1:8000/health
 ```
 
-API tests use an in-process ASGI harness and make no network calls. The API is only an HTTP adapter at this stage; webhook processing, persistence, and background jobs are not implemented.
+`POST /webhooks/github` requires `X-Hub-Signature-256`, `X-GitHub-Event`, and `X-GitHub-Delivery`. Signatures use GitHub's `sha256=<hex HMAC-SHA256>` format over the exact request bytes. Only `pull_request` events are accepted for validation; other validly signed event types return `200` with `status: "ignored"`.
+
+To send a correctly signed local request from PowerShell while the server is running:
+
+```powershell
+$body = [Text.Encoding]::UTF8.GetBytes('{"action":"opened","pull_request":{}}')
+$hmac = [Security.Cryptography.HMACSHA256]::new([Text.Encoding]::UTF8.GetBytes($env:DOCDRIFT_GITHUB_WEBHOOK_SECRET))
+$signature = 'sha256=' + [Convert]::ToHexString($hmac.ComputeHash($body)).ToLowerInvariant()
+$headers = @{
+  'X-Hub-Signature-256' = $signature
+  'X-GitHub-Event' = 'pull_request'
+  'X-GitHub-Delivery' = [guid]::NewGuid().ToString()
+}
+Invoke-RestMethod -Uri http://127.0.0.1:8000/webhooks/github -Method Post -Headers $headers -ContentType 'application/json' -Body $body
+$hmac.Dispose()
+```
+
+Responses are `200` for validated pull requests or ignored event types, `400` for missing event/delivery headers or invalid delivery IDs and payloads, `401` for missing or invalid signatures, and `503` when the server secret is not configured. Errors use `{"error":{"code":"...","message":"..."}}`. A validated response means signature and JSON validation only; no persistence, duplicate-delivery detection, queueing, analysis, or GitHub API response exists yet. The validated delivery ID is returned for a future idempotency layer. API tests use FastAPI's in-process test client and make no external network calls.
 
 Example text finding:
 

@@ -11,7 +11,7 @@ dependencies = []
 
 [project.optional-dependencies]
 api = ["fastapi>=0.115,<1", "uvicorn>=0.30,<1"]
-dev = ["pytest>=8", "ruff>=0.6", "mypy>=1.11"]
+dev = ["pytest>=8", "ruff>=0.6", "mypy>=1.11", "httpx>=0.27"]
 
 [project.scripts]
 docdrift = "docdrift_cli.main:main"
