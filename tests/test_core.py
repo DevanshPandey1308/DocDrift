@@ -10,6 +10,8 @@ from docdrift_core.models import Verdict, to_dict
 
 
 ROOT = Path(__file__).parent / "fixtures/sample_repo"
+ROUTE_CLI = Path(__file__).parent / "fixtures/route_cli_repo"
+DYNAMIC_ROUTE = Path(__file__).parent / "fixtures/dynamic_route_repo"
 
 
 class CoreTests(unittest.TestCase):
@@ -61,6 +63,68 @@ class CoreTests(unittest.TestCase):
             (root / "cli.py").write_text("import argparse\np = argparse.ArgumentParser()\nflag = '--runtime'\np.add_argument(flag)\n")
             (root / "guide.md").write_text("Run the CLI with `--runtime`.\n")
             findings, _, _ = analyze(root, ("guide.md",), ("cli.py",))
+            self.assertEqual(findings[0].verdict, Verdict.UNVERIFIABLE)
+
+    def test_route_and_framework_flags_have_real_evidence(self) -> None:
+        findings, _, _ = analyze(ROUTE_CLI, ("docs",), ("src",))
+        by_subject = {(f.claim.type.value, f.claim.subject): f for f in findings}
+        health = by_subject[("route", "/health")]
+        items = [f for f in findings if f.claim.type.value == "route" and f.claim.expected["method"] == "POST"][0]
+        head_items = [f for f in findings if f.claim.type.value == "route" and f.claim.expected["method"] == "HEAD"][0]
+        put_items = [f for f in findings if f.claim.type.value == "route" and f.claim.expected["method"] == "PUT"][0]
+        click_flag = by_subject[("cli_flag", "--click-count")]
+        typer_flag = by_subject[("cli_flag", "--typer-limit")]
+        dynamic_flag = by_subject[("cli_flag", "--computed")]
+        self.assertEqual(health.verdict, Verdict.TRUE)
+        self.assertEqual(health.claim.expected["method"], "GET")
+        self.assertEqual(items.verdict, Verdict.FALSE)
+        self.assertEqual(items.claim.expected["method"], "POST")
+        self.assertEqual(head_items.verdict, Verdict.TRUE)
+        self.assertEqual(put_items.verdict, Verdict.TRUE)
+        self.assertEqual(click_flag.verdict, Verdict.TRUE)
+        self.assertEqual(typer_flag.verdict, Verdict.TRUE)
+        self.assertEqual(dynamic_flag.verdict, Verdict.UNVERIFIABLE)
+        for finding, expected_path, expected_line in (
+            (health, "src/endpoints.py", 8),
+            (items, "src/endpoints.py", 13),
+            (click_flag, "src/commands.py", 8),
+            (typer_flag, "src/commands.py", 14),
+        ):
+            self.assertEqual(finding.evidence[0].path, expected_path)
+            self.assertEqual(finding.evidence[0].line, expected_line)
+            actual = (ROUTE_CLI / expected_path).read_text(encoding="utf-8").splitlines()[expected_line - 1].strip()
+            self.assertEqual(finding.evidence[0].snippet, actual)
+        _, index, _ = analyze(ROUTE_CLI, ("docs",), ("src",))
+        self.assertNotIn("--comment-only", index.flags)
+        self.assertNotIn("--string-only", index.flags)
+        self.assertNotIn("--not-a-cli-command", index.flags)
+
+    def test_dynamic_route_path_abstains(self) -> None:
+        findings, _, _ = analyze(DYNAMIC_ROUTE, ("docs",), ("src",))
+        self.assertTrue(all(f.verdict is Verdict.UNVERIFIABLE for f in findings))
+
+    def test_signature_conventions_and_ambiguous_symbols_abstain(self) -> None:
+        with tempfile.TemporaryDirectory(dir=Path(__file__).parent) as directory:
+            root = Path(directory)
+            (root / "one.py").write_text("def target(required, /, positional, *args, keyword, optional=1, **kwargs): return None\n")
+            (root / "guide.md").write_text(
+                "`target(required, positional, args, keyword, optional, kwargs)` accepts these names.\n"
+                "`target(required, /, positional)` accepts positional-only arguments.\n"
+                "`target(required, optional=1)` accepts optional arguments.\n"
+                "The default optional is 1.\n"
+            )
+            findings, _, _ = analyze(root, ("guide.md",), ("one.py",))
+            self.assertEqual([f.verdict for f in findings], [Verdict.TRUE, Verdict.UNVERIFIABLE, Verdict.UNVERIFIABLE, Verdict.TRUE])
+            (root / "two.py").write_text("def target(required, /, positional, *args, keyword, optional=1, **kwargs): return None\n")
+            ambiguous, _, _ = analyze(root, ("guide.md",), (".",))
+            self.assertEqual(ambiguous[0].verdict, Verdict.UNVERIFIABLE)
+
+    def test_dynamic_default_is_not_reported_as_absent_or_literal(self) -> None:
+        with tempfile.TemporaryDirectory(dir=Path(__file__).parent) as directory:
+            root = Path(directory)
+            (root / "source.py").write_text("def configure(limit=runtime_value): return limit\n")
+            (root / "guide.md").write_text("The default limit is 3.\n")
+            findings, _, _ = analyze(root, ("guide.md",), ("source.py",))
             self.assertEqual(findings[0].verdict, Verdict.UNVERIFIABLE)
 
     def test_json_serialization_and_deterministic_impact_index(self) -> None:

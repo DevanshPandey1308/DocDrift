@@ -3,12 +3,11 @@
 from __future__ import annotations
 
 import ast
-import json
 import re
 from collections.abc import Callable
 from pathlib import PurePosixPath
 
-from .index import CodeIndex, FunctionInfo
+from .index import CodeIndex, FunctionInfo, RouteInfo
 from .models import Claim, ClaimType, Evidence, Finding, Verdict
 
 Checker = Callable[[Claim, CodeIndex], Finding]
@@ -84,11 +83,9 @@ def check_default(claim: Claim, index: CodeIndex) -> Finding:
     ev = (evidence,) if evidence else ()
     if not param.has_default:
         return _finding(claim, Verdict.FALSE, f"Parameter {param.name} has no explicit default in source.", ev)
-    if param.default is None and param.has_default:
-        # None itself is a valid literal; has_default disambiguates it from absence.
-        actual = None
-    else:
-        actual = param.default
+    if not param.default_resolved:
+        return _finding(claim, Verdict.UNVERIFIABLE, f"Parameter {param.name} has a default that is not a safely representable literal.", ev)
+    actual = param.default
     if actual == expected and type(actual) is type(expected):
         return _finding(claim, Verdict.TRUE, f"Explicit default for {param.name} matches.", ev)
     return _finding(claim, Verdict.FALSE, f"Documented default {expected!r} differs from source default {actual!r}.", ev)
@@ -106,6 +103,28 @@ def check_flag(claim: Claim, index: CodeIndex) -> Finding:
     evidence = index.evidence(flag.path, flag.line)
     ev = (evidence,) if evidence else ()
     return _finding(claim, Verdict.TRUE, f"Flag {claim.subject} is declared by a recognized parser.", ev)
+
+
+def check_route(claim: Claim, index: CodeIndex) -> Finding:
+    if not _source_complete(index) or not index.routes_complete:
+        return _finding(claim, Verdict.UNVERIFIABLE, "Route indexing was incomplete because a declaration or URL prefix could not be resolved.", method="static_python_route")
+    routes = index.routes.get(claim.subject, [])
+    if not routes:
+        return _finding(claim, Verdict.UNVERIFIABLE, "No unambiguous static route declaration matches this path.", method="static_python_route")
+    declarations: dict[tuple[str, int], list[RouteInfo]] = {}
+    for route in routes:
+        declarations.setdefault((route.source_path, route.line), []).append(route)
+    if len(declarations) != 1:
+        return _finding(claim, Verdict.UNVERIFIABLE, "Multiple route declarations use this path.", method="static_python_route")
+    declaration = next(iter(declarations.values()))
+    route = declaration[0]
+    evidence = index.evidence(route.source_path, route.line)
+    ev = (evidence,) if evidence else ()
+    expected_method = str(claim.expected.get("method", "")).upper()
+    methods = sorted({item.method for item in declaration})
+    if expected_method in methods:
+        return _finding(claim, Verdict.TRUE, f"A static {expected_method} route declaration matches {route.path}.", ev, "static_python_route")
+    return _finding(claim, Verdict.FALSE, f"The static route declares {', '.join(methods)}, not {expected_method}.", ev, "static_python_route")
 
 
 def check_env(claim: Claim, index: CodeIndex) -> Finding:
@@ -160,6 +179,7 @@ REGISTRY: dict[ClaimType, Checker] = {
     ClaimType.FUNCTION: check_function,
     ClaimType.DEFAULT: check_default,
     ClaimType.CLI_FLAG: check_flag,
+    ClaimType.ROUTE: check_route,
     ClaimType.ENV_VAR: check_env,
     ClaimType.FILE_PATH: check_path,
     ClaimType.PYTHON_VERSION: check_python_version,

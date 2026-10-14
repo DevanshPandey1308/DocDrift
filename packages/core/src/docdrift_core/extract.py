@@ -10,6 +10,7 @@ from collections.abc import Iterable
 from .models import Claim, ClaimType
 
 _PATTERNS: tuple[tuple[ClaimType, re.Pattern[str]], ...] = (
+    (ClaimType.ROUTE, re.compile(r"\b(GET|POST|PUT|PATCH|DELETE|OPTIONS|HEAD)\s+`([^`]+)`\s+(?:endpoint|route)\b", re.I)),
     (ClaimType.FUNCTION, re.compile(r"`?([A-Za-z_]\w*(?:\.[A-Za-z_]\w*)*)\(([^()]*)\)`?\s+(?:accepts|takes|has parameters)\b", re.I)),
     (ClaimType.DEFAULT, re.compile(r"(?:the\s+)?default\s+(?:for\s+)?`?([A-Za-z_]\w*)`?\s+is\s+(`[^`]+`|[^.,;]+)", re.I)),
     (ClaimType.CLI_FLAG, re.compile(r"(?:(?:run|invoke|use)(?:\s+the)?\s+(?:CLI|command)(?:\s+with)?\s+)?(`--[A-Za-z][\w-]*)`", re.I)),
@@ -29,6 +30,10 @@ def _expected(kind: ClaimType, match: re.Match[str]) -> object:
         else:
             params = []
             for part in raw.split(","):
+                # This grammar does not encode calling convention or optionality.
+                # Preserve uncertainty instead of silently stripping those markers.
+                if "*" in part or "=" in part:
+                    return {"parameters": None, "ambiguous": True}
                 found = _PARAMS.fullmatch(part)
                 if not found:
                     return {"parameters": None, "ambiguous": True}
@@ -41,6 +46,8 @@ def _expected(kind: ClaimType, match: re.Match[str]) -> object:
         return {"value": val}
     if kind is ClaimType.PYTHON_VERSION:
         return {"version": match.group(1)}
+    if kind is ClaimType.ROUTE:
+        return {"method": match.group(1).upper()}
     return {}
 
 
@@ -60,6 +67,8 @@ def extract_markdown(text: str, document_path: str) -> list[Claim]:
                 subject = match.group(1)
                 if kind is ClaimType.CLI_FLAG:
                     subject = subject.strip("`")
+                if kind is ClaimType.ROUTE:
+                    subject = match.group(2)
                 # Environment tokens are case-sensitive and all caps; ignore unrelated inline code.
                 if kind is ClaimType.ENV_VAR and not re.fullmatch(r"[A-Z][A-Z0-9_]*", subject):
                     continue

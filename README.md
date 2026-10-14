@@ -5,12 +5,14 @@ DocDrift is a local, evidence-driven detector for a narrow set of documentation 
 ## Current capabilities
 
 - Deterministic extraction of supported claims from Markdown prose and inline code, excluding fenced code blocks.
-- Static Python indexing for functions, parameter kinds and literal defaults, common `argparse` declarations, and literal `os.getenv`, `os.environ.get`, and `os.environ[...]` reads.
-- Checks for function parameter lists, defaults, recognized CLI flags, environment-variable reads, repository-relative file paths, and a narrow Python version metadata form.
+- Static Python indexing for functions, parameter kinds and literal defaults, common `argparse`, Click, and Typer declarations, FastAPI/Flask route decorators, and literal environment-variable reads.
+- Checks for function parameter names, defaults, recognized CLI flags and routes, environment-variable reads, repository-relative file paths, and a narrow Python version metadata form.
 - Structured findings with stable verdict strings, document locations, actual source snippets, and syntax/read errors.
 - Exact-name impact index available to later incremental-analysis adapters.
 
 Unsupported patterns are skipped by extraction. Recognized but ambiguous patterns abstain as `unverifiable`. A positive environment-variable finding proves only that a recognized read exists; it does not establish that the variable is required or describe runtime behavior.
+
+Route checks support direct, statically constructed FastAPI and Flask apps with literal paths and methods. Router and blueprint declarations abstain when mounting/prefix resolution is uncertain. Click/Typer support is limited to common static command decorators and declarations. Function signatures compare the complete ordered parameter-name list; claims that assert optionality or calling convention abstain unless expressed as a separate supported default claim.
 
 ## Install and develop
 

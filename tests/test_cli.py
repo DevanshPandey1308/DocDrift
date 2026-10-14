@@ -9,6 +9,8 @@ from pathlib import Path
 ROOT = Path(__file__).parent.parent
 FIXTURE = ROOT / "tests/fixtures/sample_repo"
 CLEAN_FIXTURE = ROOT / "tests/fixtures/clean_repo"
+ROUTE_CLI_FIXTURE = ROOT / "tests/fixtures/route_cli_repo"
+DYNAMIC_ROUTE_FIXTURE = ROOT / "tests/fixtures/dynamic_route_repo"
 
 
 class CliTests(unittest.TestCase):
@@ -35,6 +37,14 @@ class CliTests(unittest.TestCase):
         result = self.run_cli("check", "--repo", str(CLEAN_FIXTURE), "--docs", "docs", "--source", "src")
         self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
         self.assertIn("TRUE", result.stdout)
+
+    def test_route_fixtures_have_expected_exit_codes(self) -> None:
+        route = self.run_cli("check", "--repo", str(ROUTE_CLI_FIXTURE), "--docs", "docs", "--source", "src")
+        self.assertEqual(route.returncode, 1, route.stdout + route.stderr)
+        self.assertIn("static route declares GET, HEAD, OPTIONS, PUT, not POST", route.stdout)
+        dynamic = self.run_cli("check", "--repo", str(DYNAMIC_ROUTE_FIXTURE), "--docs", "docs", "--source", "src")
+        self.assertEqual(dynamic.returncode, 0, dynamic.stdout + dynamic.stderr)
+        self.assertIn("UNVERIFIABLE", dynamic.stdout)
 
 
 if __name__ == "__main__":

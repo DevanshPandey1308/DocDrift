@@ -14,6 +14,7 @@ class ClaimType(StrEnum):
     ENV_VAR = "environment_variable"
     FILE_PATH = "file_path"
     PYTHON_VERSION = "python_version"
+    ROUTE = "route"
 
 
 class Verdict(StrEnum):
