@@ -16,7 +16,7 @@ def redis_settings_from_url(redis_url: str | None) -> RedisSettings:
         raise ValueError("DOCDRIFT_REDIS_URL must be a valid redis:// or rediss:// URL.") from error
     settings.conn_timeout = 1
     settings.conn_retries = 1
-    settings.conn_retry_delay = 0.25
+    settings.conn_retry_delay = 1
     return settings
 
 

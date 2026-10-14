@@ -19,7 +19,9 @@ class QueueTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(settings.username, "user")
         self.assertEqual(settings.password, "secret")
         self.assertTrue(settings.ssl)
+        self.assertEqual(settings.conn_timeout, 1)
         self.assertEqual(settings.conn_retries, 1)
+        self.assertEqual(settings.conn_retry_delay, 1)
 
     def test_missing_or_invalid_redis_configuration_is_reported_safely(self) -> None:
         for value in (None, "https://user:secret@example.invalid"):

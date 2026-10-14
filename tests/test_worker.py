@@ -141,7 +141,7 @@ class WorkerTests(unittest.IsolatedAsyncioTestCase):
         ):
             with self.assertRaises(Retry) as raised:
                 await worker.process_run(context, 5)
-        self.assertEqual(raised.exception.defer, 1)
+        self.assertEqual(raised.exception.defer_score, 1000)
         mark_failed.assert_not_awaited()
 
         context["job_try"] = worker.MAX_JOB_TRIES
