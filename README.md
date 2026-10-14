@@ -36,47 +36,72 @@ Repeat `--docs` or `--source` to configure several scopes. Defaults scan the rep
 
 ## API and worker setup
 
-Install the API, worker, and development dependencies from the repository root:
+From the repository root, create a virtual environment if needed and install the API, worker, and development dependencies:
 
 ```powershell
-python -m pip install -e ".[api,dev]"
+if (-not (Test-Path .venv\Scripts\python.exe)) { py -3 -m venv .venv }
+.\.venv\Scripts\python.exe -m pip install -e ".[api,dev]"
 ```
 
 The API and worker read configuration from environment variables. `DOCDRIFT_API_TITLE` (default `DocDrift API`) and `DOCDRIFT_API_VERSION` (default `0.1.0`) configure API metadata. `DOCDRIFT_GITHUB_WEBHOOK_SECRET`, `DOCDRIFT_DATABASE_URL`, and `DOCDRIFT_REDIS_URL` are required for pull-request intake and processing; app import and `GET /health` do not require GitHub credentials. Check Run publishing additionally requires `DOCDRIFT_GITHUB_APP_ID` and `DOCDRIFT_GITHUB_APP_PRIVATE_KEY`; the latter accepts PEM text with literal `\n` line breaks or real newlines. Keep these values in a local secret store or environment, never in source control. Use an async PostgreSQL URL such as `postgresql+asyncpg://user:password@localhost:5432/docdrift`; common `postgresql://` URLs are adapted to asyncpg. Redis accepts `redis://` and TLS `rediss://` URLs.
 
-Start a local Redis instance with Docker:
+For a disposable local integration environment, first start Docker Desktop and confirm its daemon is ready:
 
 ```powershell
-docker run --rm --name docdrift-redis -p 6379:6379 redis:7-alpine
+docker info
 ```
 
-Set local development configuration in the PowerShell session where you will run the API and worker:
+There is no Compose configuration in this repository. Start these disposable containers in separate PowerShell windows. They bind only to loopback, have no persistent volumes, and are removed when stopped. The PostgreSQL container uses trust authentication only for this isolated local test instance; do not reuse this configuration for a shared or production service.
 
 ```powershell
+docker run --rm --name docdrift-postgres -p 127.0.0.1:5432:5432 -e POSTGRES_HOST_AUTH_METHOD=trust -e POSTGRES_USER=docdrift -e POSTGRES_DB=docdrift postgres:16
+```
+
+```powershell
+docker run --rm --name docdrift-redis -p 127.0.0.1:6379:6379 redis:7-alpine
+```
+
+In the PowerShell window used for migrations and tests, verify both services, configure the disposable database/queue URLs, and generate a local webhook secret:
+
+```powershell
+docker exec docdrift-postgres pg_isready -U docdrift -d docdrift
+docker exec docdrift-redis redis-cli ping
+$env:DOCDRIFT_DATABASE_URL = "postgresql+asyncpg://docdrift@127.0.0.1:5432/docdrift"
+$env:DOCDRIFT_TEST_DATABASE_URL = $env:DOCDRIFT_DATABASE_URL
+$env:DOCDRIFT_REDIS_URL = "redis://127.0.0.1:6379/0"
 $env:DOCDRIFT_GITHUB_WEBHOOK_SECRET = [Convert]::ToHexString([Security.Cryptography.RandomNumberGenerator]::GetBytes(32))
-$env:DOCDRIFT_DATABASE_URL = "postgresql+asyncpg://docdrift:local-password@localhost:5432/docdrift"
-$env:DOCDRIFT_REDIS_URL = "redis://localhost:6379/0"
 ```
 
-Apply the initial schema to a fresh PostgreSQL database with Alembic:
+Run migrations only against this fresh disposable database (or another database explicitly dedicated to DocDrift testing). The command applies all revisions through `head`; `current` verifies the applied revision:
 
 ```powershell
-alembic -c .\apps\api\alembic.ini upgrade head
+.\.venv\Scripts\alembic.exe -c .\apps\api\alembic.ini upgrade head
+.\.venv\Scripts\alembic.exe -c .\apps\api\alembic.ini current
 ```
+
+The PostgreSQL integration tests use unique test records and clean them up. Run the full test suite, including those tests, with:
+
+```powershell
+.\.venv\Scripts\python.exe -m pytest -q -rs
+```
+
+The current test suite has PostgreSQL integration coverage but no live Redis/ARQ integration test; queue behavior in the unit suite uses mocks. The Redis `PING` above confirms service availability only, not a live queue/worker run.
 
 The schema stores GitHub installations, repositories, PR runs, webhook delivery metadata, and deterministic analysis findings with their claim locations and JSON evidence. `awaiting_analysis` remains as a legacy state; successful deterministic scans now transition runs from `pending` through `running` to `completed`. A distinct delivery for an existing `(repository, PR number, head SHA)` reuses that run. No raw webhook body, signature, or secret is persisted. When a valid pull-request event omits its installation object, the repository is stored without an installation association until one is known.
 
 Start the local server with:
 
 ```powershell
-uvicorn docdrift_api.main:app --reload
+.\.venv\Scripts\uvicorn.exe docdrift_api.main:app --reload
 ```
 
 In another terminal with the same environment variables, start the ARQ worker:
 
 ```powershell
-python -m docdrift_worker.worker
+.\.venv\Scripts\python.exe -m docdrift_worker.worker
 ```
+
+Set the same `DOCDRIFT_DATABASE_URL`, `DOCDRIFT_REDIS_URL`, and `DOCDRIFT_GITHUB_WEBHOOK_SECRET` values in each shell that runs the API or worker. For GitHub Check Run and summary publication, also set `DOCDRIFT_GITHUB_APP_ID` and `DOCDRIFT_GITHUB_APP_PRIVATE_KEY` in the worker shell. Those App credentials are not needed for local health checks or the PostgreSQL persistence tests.
 
 `GET /health` returns JSON with `status`, `service`, and `version` and does not require a webhook secret. Check it while the server is running:
 
