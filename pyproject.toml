@@ -16,6 +16,7 @@ api = [
     "sqlalchemy[asyncio]>=2.0,<3",
     "alembic>=1.13,<2",
     "asyncpg>=0.29,<1",
+    "arq>=0.28,<0.29",
 ]
 dev = ["pytest>=8", "ruff>=0.6", "mypy>=1.11", "httpx>=0.27"]
 
@@ -23,7 +24,7 @@ dev = ["pytest>=8", "ruff>=0.6", "mypy>=1.11", "httpx>=0.27"]
 docdrift = "docdrift_cli.main:main"
 
 [tool.setuptools.packages.find]
-where = ["packages/core/src", "packages/cli/src", "apps/api/src"]
+where = ["packages/core/src", "packages/cli/src", "apps/api/src", "apps/worker/src"]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]

@@ -22,7 +22,7 @@ Requires Python 3.12 or newer. From the repository root, install the two local p
 python -m pip install -e .\packages\core -e .\packages\cli
 ```
 
-For core and CLI development checks, install `.[dev]` from the root with `python -m pip install -e ".[dev]"`. For API development and the full test suite, install `.[api,dev]` as described in [API foundation](#api-foundation). The core and CLI runtime have no third-party dependencies. `docdrift.py` is a source-checkout launcher that works without installation.
+For core and CLI development checks, install `.[dev]` from the root with `python -m pip install -e ".[dev]"`. For API/worker development and the full test suite, install `.[api,dev]` as described in [API and worker setup](#api-and-worker-setup). The core and CLI runtime have no third-party dependencies. `docdrift.py` is a source-checkout launcher that works without installation.
 
 ## CLI
 
@@ -34,19 +34,28 @@ python .\docdrift.py check --repo . --docs docs --source packages
 
 Repeat `--docs` or `--source` to configure several scopes. Defaults scan the repository root. JSON output has `schema_version`, `findings`, and `errors`; model fields are stable and enum values are lowercase strings.
 
-## API foundation
+## API and worker setup
 
-Install the API and development dependencies from the repository root:
+Install the API, worker, and development dependencies from the repository root:
 
 ```powershell
 python -m pip install -e ".[api,dev]"
 ```
 
-The API supports `DOCDRIFT_API_TITLE` (default `DocDrift API`), `DOCDRIFT_API_VERSION` (default `0.1.0`), `DOCDRIFT_GITHUB_WEBHOOK_SECRET` (unset by default), and `DOCDRIFT_DATABASE_URL` (unset by default). Configure the webhook secret and PostgreSQL URL for pull-request intake. The health endpoint and app import do not require either setting. For local development, use an async PostgreSQL URL such as `postgresql+asyncpg://user:password@localhost:5432/docdrift`; common `postgresql://` URLs are also adapted to the asyncpg driver. Never commit real credentials. Set a random, process-local webhook secret before starting the server:
+The API and worker read configuration from environment variables. `DOCDRIFT_API_TITLE` (default `DocDrift API`) and `DOCDRIFT_API_VERSION` (default `0.1.0`) configure API metadata. `DOCDRIFT_GITHUB_WEBHOOK_SECRET`, `DOCDRIFT_DATABASE_URL`, and `DOCDRIFT_REDIS_URL` are required for pull-request intake and processing; app import and `GET /health` do not require GitHub credentials. Use an async PostgreSQL URL such as `postgresql+asyncpg://user:password@localhost:5432/docdrift`; common `postgresql://` URLs are adapted to asyncpg. Redis accepts `redis://` and TLS `rediss://` URLs. Never commit real credentials.
+
+Start a local Redis instance with Docker:
+
+```powershell
+docker run --rm --name docdrift-redis -p 6379:6379 redis:7-alpine
+```
+
+Set local development configuration in the PowerShell session where you will run the API and worker:
 
 ```powershell
 $env:DOCDRIFT_GITHUB_WEBHOOK_SECRET = [Convert]::ToHexString([Security.Cryptography.RandomNumberGenerator]::GetBytes(32))
 $env:DOCDRIFT_DATABASE_URL = "postgresql+asyncpg://docdrift:local-password@localhost:5432/docdrift"
+$env:DOCDRIFT_REDIS_URL = "redis://localhost:6379/0"
 ```
 
 Apply the initial schema to a fresh PostgreSQL database with Alembic:
@@ -55,12 +64,18 @@ Apply the initial schema to a fresh PostgreSQL database with Alembic:
 alembic -c .\apps\api\alembic.ini upgrade head
 ```
 
-The initial schema stores GitHub installations, repositories, PR runs, and webhook delivery metadata. PR runs start with status `pending`; this milestone does not enqueue or analyze them. Delivery IDs are unique, so a repeated delivery returns `duplicate`; a distinct delivery for an already-recorded `(repository, PR number, head SHA)` is accepted without creating a second run. No raw webhook body, signature, or secret is persisted. When a valid pull-request event omits its installation object, the repository is stored without an installation association until one is known.
+The schema stores GitHub installations, repositories, PR runs, and webhook delivery metadata. It includes an `awaiting_analysis` run state for the current worker placeholder. A distinct delivery for an existing `(repository, PR number, head SHA)` reuses that run. No raw webhook body, signature, or secret is persisted. When a valid pull-request event omits its installation object, the repository is stored without an installation association until one is known.
 
 Start the local server with:
 
 ```powershell
 uvicorn docdrift_api.main:app --reload
+```
+
+In another terminal with the same environment variables, start the ARQ worker:
+
+```powershell
+python -m docdrift_worker.worker
 ```
 
 `GET /health` returns JSON with `status`, `service`, and `version` and does not require a webhook secret. Check it while the server is running:
@@ -86,7 +101,9 @@ Invoke-RestMethod -Uri http://127.0.0.1:8000/webhooks/github -Method Post -Heade
 $hmac.Dispose()
 ```
 
-Responses are `202` after a pull-request delivery and its initial run persist successfully, `200` for duplicate deliveries or ignored event types, `400` for invalid headers or payloads, `401` for missing or invalid signatures, and `503` when webhook or database configuration is unavailable or persistence fails. Errors use `{"error":{"code":"...","message":"..."}}`. A successful response confirms durable intake only: no job is queued, no analysis runs, and no GitHub API response is published. API unit tests use FastAPI's in-process test client and make no external network calls. Optional PostgreSQL integration tests use `DOCDRIFT_TEST_DATABASE_URL`; migrate a dedicated test database before running them.
+Responses are `202` only after the delivery and run are persisted and the job is queued, `200` for an already-recorded delivery or ignored event, `400` for invalid headers or payloads, `401` for an invalid signature, and `503` when required configuration, persistence, or Redis publication is unavailable. If Redis publication fails after persistence, retrying that webhook finds the existing run and safely retries publication. ARQ job IDs use `docdrift:run:<run_id>`; ARQ suppresses duplicate active/recent IDs, and the worker's state check keeps repeated executions safe. ARQ may execute jobs more than once; successful job results are retained for one hour. The worker allows up to three attempts with deferred retries and uses a 30-second timeout.
+
+The worker validates the persisted run and transitions it from `pending` through `running` to `awaiting_analysis`. It does not clone repositories, analyze documentation, or publish GitHub results. The health endpoint reports API health only and does not claim Redis health. API unit tests use mocks and make no external network calls. Optional PostgreSQL integration tests use `DOCDRIFT_TEST_DATABASE_URL`; migrate a dedicated test database before running them.
 
 Example text finding:
 

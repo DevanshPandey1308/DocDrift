@@ -23,6 +23,7 @@ class PullRequestRecord:
 @dataclass(frozen=True)
 class PersistenceResult:
     duplicate_delivery: bool
+    run_id: int | None
 
 
 async def persist_pull_request(
@@ -45,7 +46,19 @@ async def persist_pull_request(
         )
         delivery_row_id = (await session.execute(delivery_insert)).scalar_one_or_none()
         if delivery_row_id is None:
-            return PersistenceResult(duplicate_delivery=True)
+            repository_id = await session.scalar(
+                select(Repository.id).where(Repository.full_name == pull_request.repository_full_name)
+            )
+            run_id = None
+            if repository_id is not None:
+                run_id = await session.scalar(
+                    select(Run.id).where(
+                        Run.repository_id == repository_id,
+                        Run.pull_request_number == pull_request.pull_request_number,
+                        Run.head_sha == pull_request.head_sha,
+                    )
+                )
+            return PersistenceResult(duplicate_delivery=True, run_id=run_id)
 
         internal_installation_id: int | None = None
         if pull_request.installation_id is not None:
@@ -123,5 +136,14 @@ async def persist_pull_request(
             )
         )
         await session.execute(run_insert)
+        run_id = await session.scalar(
+            select(Run.id).where(
+                Run.repository_id == repository_id,
+                Run.pull_request_number == pull_request.pull_request_number,
+                Run.head_sha == pull_request.head_sha,
+            )
+        )
+        if run_id is None:
+            raise RuntimeError("Pull-request run upsert did not return a run.")
 
-    return PersistenceResult(duplicate_delivery=False)
+    return PersistenceResult(duplicate_delivery=False, run_id=run_id)

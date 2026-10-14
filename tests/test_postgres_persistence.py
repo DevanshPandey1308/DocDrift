@@ -70,7 +70,9 @@ class PostgreSQLPersistenceTests(unittest.IsolatedAsyncioTestCase):
         )
 
         self.assertFalse(first.duplicate_delivery)
+        self.assertIsNotNone(first.run_id)
         self.assertTrue(repeated_delivery.duplicate_delivery)
+        self.assertEqual(repeated_delivery.run_id, first.run_id)
         self.assertFalse(new_delivery_same_head.duplicate_delivery)
         self.assertFalse(new_head.duplicate_delivery)
         async with self.sessions() as session:

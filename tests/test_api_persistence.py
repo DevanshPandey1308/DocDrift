@@ -49,12 +49,13 @@ class PersistenceSchemaTests(unittest.TestCase):
         self.assertIn(RunStatus.COMPLETED, tuple(RunStatus))
         self.assertEqual(DeliveryStatus.ACCEPTED.value, "accepted")
 
-    def test_alembic_has_one_initial_revision_and_async_environment(self) -> None:
+    def test_alembic_has_initial_schema_and_worker_state_revisions(self) -> None:
         config = Config(str(ROOT / "apps/api/alembic.ini"))
         script = ScriptDirectory.from_config(config)
         revision = script.get_current_head()
 
-        self.assertEqual(revision, "0001_initial")
+        self.assertEqual(revision, "0002_run_awaiting_analysis")
+        self.assertIn(RunStatus.AWAITING_ANALYSIS, tuple(RunStatus))
         self.assertTrue((ROOT / "apps/api/migrations/env.py").is_file())
 
 

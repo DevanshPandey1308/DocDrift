@@ -9,6 +9,7 @@ from unittest.mock import AsyncMock, patch
 from docdrift_api import app, create_app
 from docdrift_api.config import Settings
 from docdrift_api.persistence import PersistenceResult
+from docdrift_api.queue import run_job_id
 from fastapi import FastAPI
 from fastapi.testclient import TestClient
 from sqlalchemy.exc import SQLAlchemyError
@@ -23,6 +24,19 @@ class ResponseLike(Protocol):
     def text(self) -> str: ...
 
     def json(self) -> Any: ...
+
+
+class FakeRedisPool:
+    def __init__(self, *, duplicate: bool = False, error: Exception | None = None) -> None:
+        self.duplicate = duplicate
+        self.error = error
+        self.enqueued: list[tuple[str, int, str]] = []
+
+    async def enqueue_job(self, function: str, run_id: int, *, _job_id: str) -> object | None:
+        if self.error is not None:
+            raise self.error
+        self.enqueued.append((function, run_id, _job_id))
+        return None if self.duplicate else object()
 
 
 class ApiTests(unittest.TestCase):
@@ -70,6 +84,7 @@ class ApiTests(unittest.TestCase):
                 "DOCDRIFT_API_VERSION": "2.3.4",
                 "DOCDRIFT_GITHUB_WEBHOOK_SECRET": self.secret,
                 "DOCDRIFT_DATABASE_URL": "postgresql://user:pass@localhost/docdrift",
+                "DOCDRIFT_REDIS_URL": "redis://:pass@localhost:6379/2",
             },
             clear=True,
         ):
@@ -79,6 +94,7 @@ class ApiTests(unittest.TestCase):
         self.assertEqual(settings.version, "2.3.4")
         self.assertEqual(settings.github_webhook_secret, self.secret)
         self.assertEqual(settings.database_url, "postgresql://user:pass@localhost/docdrift")
+        self.assertEqual(settings.redis_url, "redis://:pass@localhost:6379/2")
 
     def test_health_endpoint_works_without_webhook_secret(self) -> None:
         client = TestClient(create_app(Settings()))
@@ -97,10 +113,11 @@ class ApiTests(unittest.TestCase):
 
     def test_valid_pull_request_is_accepted_and_delivery_id_is_preserved(self) -> None:
         body = self._pull_request_body()
-        client = self._database_client()
+        queue = FakeRedisPool()
+        client = self._database_client(queue)
         with patch(
             "docdrift_api.webhooks.persist_pull_request",
-            new=AsyncMock(return_value=PersistenceResult(duplicate_delivery=False)),
+            new=AsyncMock(return_value=PersistenceResult(duplicate_delivery=False, run_id=19)),
         ) as persist:
             response = client.post("/webhooks/github", content=body, headers=self._headers(body))
 
@@ -111,18 +128,20 @@ class ApiTests(unittest.TestCase):
                 "status": "accepted",
                 "event": "pull_request",
                 "delivery_id": "delivery-123",
-                "message": "Webhook delivery and pending run were persisted; no analysis was run or queued.",
+                "message": "Webhook delivery and run were persisted and queued; analysis has not run.",
             },
         )
         persist.assert_awaited_once()
+        self.assertEqual(queue.enqueued, [("process_run", 19, run_job_id(19))])
 
     def test_duplicate_delivery_returns_consistent_duplicate_response(self) -> None:
         body = self._pull_request_body()
+        client = self._database_client(FakeRedisPool(duplicate=True))
         with patch(
             "docdrift_api.webhooks.persist_pull_request",
-            new=AsyncMock(return_value=PersistenceResult(duplicate_delivery=True)),
+            new=AsyncMock(return_value=PersistenceResult(duplicate_delivery=True, run_id=19)),
         ) as persist:
-            response = self._database_client().post(
+            response = client.post(
                 "/webhooks/github", content=body, headers=self._headers(body)
             )
 
@@ -130,6 +149,55 @@ class ApiTests(unittest.TestCase):
         self.assertEqual(response.json()["status"], "duplicate")
         self.assertEqual(response.json()["delivery_id"], "delivery-123")
         persist.assert_awaited_once()
+
+    def test_duplicate_delivery_retries_queue_publication_after_previous_failure(self) -> None:
+        body = self._pull_request_body()
+        with patch(
+            "docdrift_api.webhooks.persist_pull_request",
+            new=AsyncMock(return_value=PersistenceResult(duplicate_delivery=True, run_id=19)),
+        ):
+            response = self._database_client().post(
+                "/webhooks/github", content=body, headers=self._headers(body)
+            )
+
+        self.assertEqual(response.status_code, 202)
+        self.assertEqual(response.json()["status"], "accepted")
+
+    def test_missing_redis_configuration_does_not_acknowledge_persisted_run(self) -> None:
+        body = self._pull_request_body()
+        factory = cast(async_sessionmaker[AsyncSession], object())
+        client = TestClient(
+            create_app(Settings(github_webhook_secret=self.secret), session_factory=factory)
+        )
+        with patch(
+            "docdrift_api.webhooks.persist_pull_request",
+            new=AsyncMock(return_value=PersistenceResult(duplicate_delivery=False, run_id=19)),
+        ):
+            response = client.post("/webhooks/github", content=body, headers=self._headers(body))
+
+        self._assert_error(
+            response,
+            503,
+            "redis_not_configured",
+            "Pull-request intake requires DOCDRIFT_REDIS_URL to be configured.",
+        )
+
+    def test_queue_failure_returns_retryable_error_without_exposing_exception(self) -> None:
+        body = self._pull_request_body()
+        client = self._database_client(FakeRedisPool(error=RuntimeError("redis://secret")))
+        with patch(
+            "docdrift_api.webhooks.persist_pull_request",
+            new=AsyncMock(return_value=PersistenceResult(duplicate_delivery=False, run_id=19)),
+        ):
+            response = client.post("/webhooks/github", content=body, headers=self._headers(body))
+
+        self._assert_error(
+            response,
+            503,
+            "queue_unavailable",
+            "The run was persisted but could not be queued; retry the webhook delivery.",
+        )
+        self.assertNotIn("redis://secret", response.text)
 
     def test_missing_pull_request_fields_are_rejected_before_database_access(self) -> None:
         body = b'{"action":"opened","pull_request":{}}'
@@ -161,7 +229,7 @@ class ApiTests(unittest.TestCase):
         )
         with patch(
             "docdrift_api.webhooks.persist_pull_request",
-            new=AsyncMock(return_value=PersistenceResult(duplicate_delivery=False)),
+            new=AsyncMock(return_value=PersistenceResult(duplicate_delivery=False, run_id=19)),
         ) as persist:
             response = self._database_client().post(
                 "/webhooks/github", content=body, headers=self._headers(body)
@@ -204,10 +272,16 @@ class ApiTests(unittest.TestCase):
         self._assert_error(response, 401, "invalid_signature", "Webhook signature is invalid.")
         persist.assert_not_awaited()
 
-    def _database_client(self) -> TestClient:
+    def _database_client(self, redis_pool: FakeRedisPool | None = None) -> TestClient:
         # The factory is injected solely to exercise the API adapter without PostgreSQL.
         factory = cast(async_sessionmaker[AsyncSession], object())
-        return TestClient(create_app(Settings(github_webhook_secret=self.secret), session_factory=factory))
+        return TestClient(
+            create_app(
+                Settings(github_webhook_secret=self.secret),
+                session_factory=factory,
+                redis_pool=cast(Any, redis_pool or FakeRedisPool()),
+            )
+        )
 
     @staticmethod
     def _pull_request_body() -> bytes:
