@@ -137,6 +137,21 @@ def _safe_repository_path(path: object) -> bool:
     )
 
 
+def is_valid_inline_location(
+    document_path: object, document_line: object, inline_comment_line: object
+) -> bool:
+    """Validate the safe, exact new-side line location used by inline comments."""
+    return (
+        _safe_repository_path(document_path)
+        and isinstance(document_line, int)
+        and not isinstance(document_line, bool)
+        and 1 <= document_line <= 2_147_483_647
+        and isinstance(inline_comment_line, int)
+        and not isinstance(inline_comment_line, bool)
+        and inline_comment_line == document_line
+    )
+
+
 def _inline_identity(finding: FindingView, external_id: str) -> str:
     claim_id = getattr(finding, "claim_id", "")
     location = f"{finding.document_path}:{finding.document_line}"
@@ -190,15 +205,13 @@ def _eligible_inline_findings(
         and _confidence_rank(finding) > 0
         and classify_severity(finding) is not None
         and SEVERITY_ORDER[classify_severity(finding) or "unclassified"] <= threshold
-        and _safe_repository_path(finding.document_path)
         and isinstance(getattr(finding, "claim_id", None), str)
         and bool(getattr(finding, "claim_id", ""))
-        and isinstance(getattr(finding, "inline_comment_line", None), int)
-        and not isinstance(getattr(finding, "inline_comment_line", None), bool)
-        and getattr(finding, "inline_comment_line", None) == finding.document_line
-        and isinstance(finding.document_line, int)
-        and not isinstance(finding.document_line, bool)
-        and 1 <= finding.document_line <= 2_147_483_647
+        and is_valid_inline_location(
+            finding.document_path,
+            finding.document_line,
+            getattr(finding, "inline_comment_line", None),
+        )
     ]
     return sorted(eligible, key=_finding_sort_key)[:max_inline_comments]
 
