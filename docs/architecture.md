@@ -58,17 +58,17 @@ the larger of removed/inserted span lengths to 1,000 characters and the larger p
 line count to 5; callers can provide smaller or larger positive limits. Patch results
 retain both full document versions and the affected span. No patch function writes files.
 
-The project currently has no Markdown parser or validator dependency, so patch
-construction does not claim to validate Markdown syntax. The separate
-`docdrift_core.fix_verification.reverify_candidate_patch` workflow rechecks patch
-consistency against the original document and extracted claim, applies the edit only to
-an in-memory string, and requires one re-extracted claim overlapping the edited span. It
-then runs the existing deterministic checker and, when configured and eligible, the
-existing grounded verification orchestration. Its result reports patch, extraction,
-verification, and final fix status separately; only an accepted `true` verdict marks the
-candidate verified. It never writes the document or publishes a fix. It verifies the
-affected claim only; it does not validate Markdown syntax or re-verify every other claim
-in the edited region, so those remain limitations before delivery integration.
+`docdrift_core.fix_verification.reverify_candidate_patch` uses `markdown-it-py` to parse
+the candidate document, applies the edit only to an in-memory string, and re-extracts all
+supported claims on the physical lines touched by the replacement. It requires the
+intended claim to be located uniquely and verifies every extracted claim in that region
+with the existing deterministic-first checker and, when configured and eligible, the
+existing grounded verification orchestration. The structured result reports parser
+status, extraction coverage, and each claim's finding separately. A candidate is
+verified only when parsing and extraction succeed and every required claim is accepted
+as `true`. CommonMark is permissive, so parser acceptance does not prove stylistic
+validity or detect every malformed-looking construct; extraction covers only patterns
+supported by DocDrift. It never writes the document or publishes a fix.
 
 ## Pull request reporting
 

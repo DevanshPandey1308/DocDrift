@@ -22,7 +22,7 @@ Requires Python 3.12 or newer. From the repository root, install the two local p
 python -m pip install -e .\packages\core -e .\packages\cli
 ```
 
-For core and CLI development checks, install `.[dev]` from the root with `python -m pip install -e ".[dev]"`. For API/worker development and the full test suite, install `.[api,dev]` as described in [API and worker setup](#api-and-worker-setup). The core and CLI runtime have no third-party dependencies. `docdrift.py` is a source-checkout launcher that works without installation.
+For core and CLI development checks, install `.[dev]` from the root with `python -m pip install -e ".[dev]"`. For API/worker development and the full test suite, install `.[api,dev]` as described in [API and worker setup](#api-and-worker-setup). The core uses `markdown-it-py` to parse candidate documents during in-memory fix re-verification; the CLI otherwise has no third-party runtime dependencies. `docdrift.py` is a source-checkout launcher that works without installation.
 
 ## CLI
 

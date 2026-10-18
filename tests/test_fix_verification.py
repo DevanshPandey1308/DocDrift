@@ -8,6 +8,7 @@ from unittest.mock import patch as mock_patch
 
 from docdrift_core import (
     Claim,
+    ClaimType,
     Evidence,
     Verdict,
     VerificationRequest,
@@ -19,7 +20,9 @@ from docdrift_core import (
 )
 from docdrift_core.fix_verification import (
     CandidatePatchStatus,
+    ExtractionCoverageStatus,
     FixReverificationResult,
+    MarkdownValidationStatus,
     ReExtractionStatus,
     ReVerificationStatus,
     reverify_candidate_patch,
@@ -144,6 +147,8 @@ class FixReverificationTests(unittest.TestCase):
         self.assertEqual(result.patch_status, CandidatePatchStatus.APPLIED_IN_MEMORY)
         self.assertEqual(result.re_extraction_status, ReExtractionStatus.FOUND)
         self.assertEqual(result.verification_status, ReVerificationStatus.COMPLETED)
+        self.assertEqual(result.markdown_validation_status, MarkdownValidationStatus.VALID)
+        self.assertEqual(result.extraction_coverage_status, ExtractionCoverageStatus.COMPLETE)
         assert result.verification_finding is not None
         self.assertEqual(result.verification_finding.verdict, Verdict.TRUE)
         self.assertTrue(result.fix_verified)
@@ -222,6 +227,7 @@ class FixReverificationTests(unittest.TestCase):
         claim, missing_patch = self.candidate(document, "not a supported claim")
         missing = self.verify(document, claim, missing_patch)
         self.assertEqual(missing.re_extraction_status, ReExtractionStatus.MISSING)
+        self.assertEqual(missing.extraction_coverage_status, ExtractionCoverageStatus.MISSING)
         self.assertFalse(missing.fix_verified)
 
         claim, ambiguous_patch = self.candidate(
@@ -229,7 +235,104 @@ class FixReverificationTests(unittest.TestCase):
         )
         ambiguous = self.verify(document, claim, ambiguous_patch)
         self.assertEqual(ambiguous.re_extraction_status, ReExtractionStatus.AMBIGUOUS)
+        self.assertEqual(
+            ambiguous.extraction_coverage_status, ExtractionCoverageStatus.AMBIGUOUS
+        )
         self.assertFalse(ambiguous.fix_verified)
+
+    def test_every_supported_claim_in_the_edited_line_is_verified(self) -> None:
+        document = "The default timeout is 60; use CLI flag `--retries`.\n"
+        claims = extract_markdown(document, "docs/guide.md")
+        default_claim = next(claim for claim in claims if claim.type is ClaimType.DEFAULT)
+        candidate_patch = create_claim_patch(
+            document,
+            default_claim,
+            expected_original=default_claim.text[default_claim.span_start : default_claim.span_end],
+            replacement_text="The default timeout is 30",
+        )
+
+        result = self.verify(document, default_claim, candidate_patch)
+
+        self.assertEqual(len(result.required_claims), 2)
+        self.assertEqual(len(result.claim_verifications), 2)
+        self.assertTrue(
+            all(
+                item.finding is not None and item.finding.verdict is Verdict.TRUE
+                for item in result.claim_verifications
+            )
+        )
+        self.assertTrue(result.fix_verified)
+
+    def test_claim_shifted_by_multiline_edit_is_still_reverified(self) -> None:
+        document = "The default timeout is 60; use CLI flag `--retries`.\n"
+        claims = extract_markdown(document, "docs/guide.md")
+        default_claim = next(claim for claim in claims if claim.type is ClaimType.DEFAULT)
+        candidate_patch = create_claim_patch(
+            document,
+            default_claim,
+            expected_original=default_claim.text[default_claim.span_start : default_claim.span_end],
+            replacement_text="The default timeout is 30\n",
+        )
+
+        result = self.verify(document, default_claim, candidate_patch)
+
+        self.assertEqual(len(result.required_claims), 2)
+        self.assertEqual(len(result.claim_verifications), 2)
+        self.assertTrue(result.fix_verified)
+
+    def test_candidate_is_not_verified_when_another_claim_in_region_is_unverifiable(self) -> None:
+        document = "The default timeout is 60; use CLI flag `--unknown`.\n"
+        claims = extract_markdown(document, "docs/guide.md")
+        default_claim = next(claim for claim in claims if claim.type is ClaimType.DEFAULT)
+        candidate_patch = create_claim_patch(
+            document,
+            default_claim,
+            expected_original=default_claim.text[default_claim.span_start : default_claim.span_end],
+            replacement_text="The default timeout is 30",
+        )
+
+        result = self.verify(document, default_claim, candidate_patch)
+
+        self.assertEqual(len(result.claim_verifications), 2)
+        first_finding = result.claim_verifications[0].finding
+        second_finding = result.claim_verifications[1].finding
+        assert first_finding is not None
+        assert second_finding is not None
+        self.assertEqual(first_finding.verdict, Verdict.TRUE)
+        self.assertEqual(second_finding.verdict, Verdict.UNVERIFIABLE)
+        self.assertFalse(result.fix_verified)
+
+    def test_edit_cannot_hide_an_existing_claim_from_reextraction(self) -> None:
+        document = "The default timeout is 60; use CLI flag `--retries`.\n"
+        claims = extract_markdown(document, "docs/guide.md")
+        default_claim = next(claim for claim in claims if claim.type is ClaimType.DEFAULT)
+        candidate_patch = create_claim_patch(
+            document,
+            default_claim,
+            expected_original=default_claim.text[default_claim.span_start : default_claim.span_end],
+            replacement_text="The default timeout is 30\n```",
+        )
+
+        result = self.verify(document, default_claim, candidate_patch)
+
+        self.assertEqual(result.re_extraction_status, ReExtractionStatus.MISSING)
+        self.assertEqual(result.extraction_coverage_status, ExtractionCoverageStatus.MISSING)
+        self.assertFalse(result.fix_verified)
+
+    def test_parser_rejection_for_malformed_candidate_fails_closed(self) -> None:
+        document = "The default timeout is 60.\n"
+        claim, candidate_patch = self.candidate(document, "The default timeout is 30")
+
+        with mock_patch(
+            "docdrift_core.fix_verification.MarkdownIt",
+            side_effect=ValueError("malformed markdown"),
+        ):
+            result = self.verify(document, claim, candidate_patch)
+
+        self.assertEqual(result.markdown_validation_status, MarkdownValidationStatus.INVALID)
+        self.assertIn("ValueError", result.markdown_validation_error or "")
+        self.assertEqual(result.claim_verifications, ())
+        self.assertFalse(result.fix_verified)
 
     def test_stale_patch_and_claim_mismatch_are_rejected(self) -> None:
         document = "The default timeout is 60.\n"

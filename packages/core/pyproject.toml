@@ -7,7 +7,7 @@ name = "docdrift-core"
 version = "0.1.0"
 description = "Reusable deterministic documentation drift analysis engine"
 requires-python = ">=3.12"
-dependencies = []
+dependencies = ["markdown-it-py>=3,<5"]
 
 [tool.setuptools.packages.find]
 where = ["src"]
