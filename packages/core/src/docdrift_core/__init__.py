@@ -15,6 +15,14 @@ from .orchestration import (
     GroundedVerificationClient,
     orchestrate_verification,
 )
+from .patches import (
+    DocumentationPatch,
+    PatchLimits,
+    PatchValidationError,
+    create_claim_patch,
+    create_span_patch,
+    create_unique_text_patch,
+)
 from .verification import (
     EvidenceCitation,
     EvidenceSufficiencyGate,
@@ -29,6 +37,7 @@ __all__ = [
     "AnalysisError",
     "Claim",
     "ClaimType",
+    "DocumentationPatch",
     "Evidence",
     "EvidenceCitation",
     "EvidenceSufficiencyGate",
@@ -36,6 +45,8 @@ __all__ = [
     "GroundedLLMClient",
     "GroundedVerificationClient",
     "LLMProvider",
+    "PatchLimits",
+    "PatchValidationError",
     "Verdict",
     "VerificationRequest",
     "VerificationResult",
@@ -45,6 +56,9 @@ __all__ = [
     "analyze",
     "build_impact_index",
     "build_index",
+    "create_claim_patch",
+    "create_span_patch",
+    "create_unique_text_patch",
     "extract_markdown",
     "orchestrate_verification",
     "select_impacted_claims",

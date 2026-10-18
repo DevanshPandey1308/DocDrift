@@ -48,6 +48,21 @@ GitHub publication, so current production findings remain deterministic.
 
 Repository content is untrusted data. The engine does not execute code, use `eval`/`exec`, retrieve secrets or environment values, or make network calls. File path claims are resolved and constrained to the repository root. Route and CLI recognizers use AST shape and literal values; they do not import FastAPI, Flask, Click, or Typer. Router mounting and prefixes are not fully resolved, so uncertain route claims abstain.
 
+## Guarded documentation patches
+
+`docdrift_core.patches` constructs immutable in-memory span patches. Callers can target
+explicit zero-based character offsets, use a `Claim`'s one-based line and line-local
+span, or request an exact-text target only when it occurs once. Every path verifies the
+expected original text and rejects stale or ambiguous targets. The default guard limits
+the larger of removed/inserted span lengths to 1,000 characters and the larger physical
+line count to 5; callers can provide smaller or larger positive limits. Patch results
+retain both full document versions and the affected span. No patch function writes files.
+
+The project currently has no Markdown parser or validator dependency, so patch
+construction does not claim to validate Markdown syntax. It also does not re-extract or
+re-verify claims, prove a fix, or make it publishable. Those proof steps from blueprint
+Section 8.6 must be implemented before any future delivery integration.
+
 ## Pull request reporting
 
 The worker stores a review-comment line only when the claim's exact Markdown line appears as an added line in the no-renames unified diff between the run's pinned base and head. This covers additions and the new side of modifications; unchanged context, deletions, malformed diffs, and unsupported paths have no inline anchor and remain in the Check Run and summary. Publication rechecks the open pull request's base and head before sending plain `RIGHT`-side comments. It enforces the run's severity threshold and comment budget, excludes ignored findings, and uses a stable hidden marker so retries can update an existing comment. It does not generate suggested changes.
