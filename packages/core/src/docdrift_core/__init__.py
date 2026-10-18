@@ -3,6 +3,12 @@
 from .analysis import analyze, build_impact_index, select_impacted_claims
 from .extract import extract_markdown
 from .index import build_index
+from .llm_client import (
+    GroundedLLMClient,
+    LLMProvider,
+    VerificationRequest,
+    adapt_provider_response,
+)
 from .models import AnalysisError, Claim, ClaimType, Evidence, Finding, Verdict
 from .verification import (
     EvidenceCitation,
@@ -21,10 +27,14 @@ __all__ = [
     "EvidenceCitation",
     "EvidenceSufficiencyGate",
     "Finding",
+    "GroundedLLMClient",
+    "LLMProvider",
     "Verdict",
+    "VerificationRequest",
     "VerificationResult",
     "VerificationSnippet",
     "VerificationVerdict",
+    "adapt_provider_response",
     "analyze",
     "build_impact_index",
     "build_index",

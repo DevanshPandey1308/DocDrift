@@ -23,6 +23,15 @@ and approves the cited snippets. Missing, failing, or negative gates and all mal
 unmatched output become `abstain`. This contract is not connected to the analysis worker,
 persisted findings, or GitHub publication; current PR behavior remains deterministic.
 
+`docdrift_core.llm_client` adds an asynchronous `LLMProvider` protocol and a thin client
+that accepts only a `VerificationRequest` built from the existing claim and evidence
+snippet types. Requests are bounded to 16 snippets, 4,000 characters per snippet and
+16,000 evidence characters total. The caller supplies a timeout greater than zero and no
+more than 60 seconds, plus the trusted evidence-sufficiency gate. Provider responses may
+be a JSON object or JSON text; duplicate JSON keys, malformed output, provider errors and
+timeouts all abstain without exposing provider exception details. Cancellation propagates.
+No provider SDK, credentials, or production pipeline integration is included.
+
 Repository content is untrusted data. The engine does not execute code, use `eval`/`exec`, retrieve secrets or environment values, or make network calls. File path claims are resolved and constrained to the repository root. Route and CLI recognizers use AST shape and literal values; they do not import FastAPI, Flask, Click, or Typer. Router mounting and prefixes are not fully resolved, so uncertain route claims abstain.
 
 ## Pull request reporting
