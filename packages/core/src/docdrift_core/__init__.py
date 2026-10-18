@@ -10,6 +10,11 @@ from .llm_client import (
     adapt_provider_response,
 )
 from .models import AnalysisError, Claim, ClaimType, Evidence, Finding, Verdict
+from .orchestration import (
+    LLM_ELIGIBLE_CLAIM_TYPES,
+    GroundedVerificationClient,
+    orchestrate_verification,
+)
 from .verification import (
     EvidenceCitation,
     EvidenceSufficiencyGate,
@@ -20,6 +25,7 @@ from .verification import (
 )
 
 __all__ = [
+    "LLM_ELIGIBLE_CLAIM_TYPES",
     "AnalysisError",
     "Claim",
     "ClaimType",
@@ -28,6 +34,7 @@ __all__ = [
     "EvidenceSufficiencyGate",
     "Finding",
     "GroundedLLMClient",
+    "GroundedVerificationClient",
     "LLMProvider",
     "Verdict",
     "VerificationRequest",
@@ -39,6 +46,7 @@ __all__ = [
     "build_impact_index",
     "build_index",
     "extract_markdown",
+    "orchestrate_verification",
     "select_impacted_claims",
     "validate_verification_output",
 ]

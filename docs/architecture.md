@@ -32,6 +32,20 @@ be a JSON object or JSON text; duplicate JSON keys, malformed output, provider e
 timeouts all abstain without exposing provider exception details. Cancellation propagates.
 No provider SDK, credentials, or production pipeline integration is included.
 
+`docdrift_core.orchestration.orchestrate_verification` is an explicit opt-in adapter
+for callers that have a deterministic `unverifiable` finding and already-selected
+repository evidence. It preserves deterministic `true` and `false` findings without
+calling the client. Only function, default-value, CLI-flag, environment-variable,
+Python-version, and route claims are eligible for LLM fallback; file-path claims remain
+with the deterministic repository-path checker. Requests are bounded by the client
+limits, and the function does not read files or give the provider tools. A client result
+is accepted only when it is the existing `VerificationResult` contract and its citations
+resolve to exact supplied snippets; true/false results must come from a `GroundedLLMClient`
+that applied its required trusted evidence-sufficiency gate. Accepted findings record
+`grounded_llm` and `deterministic=False`; client failures, malformed results, and invalid
+citations become `unverifiable`. This function is not wired into the analysis pipeline or
+GitHub publication, so current production findings remain deterministic.
+
 Repository content is untrusted data. The engine does not execute code, use `eval`/`exec`, retrieve secrets or environment values, or make network calls. File path claims are resolved and constrained to the repository root. Route and CLI recognizers use AST shape and literal values; they do not import FastAPI, Flask, Click, or Typer. Router mounting and prefixes are not fully resolved, so uncertain route claims abstain.
 
 ## Pull request reporting
