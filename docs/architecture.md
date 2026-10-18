@@ -59,9 +59,16 @@ line count to 5; callers can provide smaller or larger positive limits. Patch re
 retain both full document versions and the affected span. No patch function writes files.
 
 The project currently has no Markdown parser or validator dependency, so patch
-construction does not claim to validate Markdown syntax. It also does not re-extract or
-re-verify claims, prove a fix, or make it publishable. Those proof steps from blueprint
-Section 8.6 must be implemented before any future delivery integration.
+construction does not claim to validate Markdown syntax. The separate
+`docdrift_core.fix_verification.reverify_candidate_patch` workflow rechecks patch
+consistency against the original document and extracted claim, applies the edit only to
+an in-memory string, and requires one re-extracted claim overlapping the edited span. It
+then runs the existing deterministic checker and, when configured and eligible, the
+existing grounded verification orchestration. Its result reports patch, extraction,
+verification, and final fix status separately; only an accepted `true` verdict marks the
+candidate verified. It never writes the document or publishes a fix. It verifies the
+affected claim only; it does not validate Markdown syntax or re-verify every other claim
+in the edited region, so those remain limitations before delivery integration.
 
 ## Pull request reporting
 

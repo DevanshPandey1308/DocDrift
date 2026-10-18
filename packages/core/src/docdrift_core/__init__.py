@@ -2,6 +2,13 @@
 
 from .analysis import analyze, build_impact_index, select_impacted_claims
 from .extract import extract_markdown
+from .fix_verification import (
+    CandidatePatchStatus,
+    FixReverificationResult,
+    ReExtractionStatus,
+    ReVerificationStatus,
+    reverify_candidate_patch,
+)
 from .index import build_index
 from .llm_client import (
     GroundedLLMClient,
@@ -35,6 +42,7 @@ from .verification import (
 __all__ = [
     "LLM_ELIGIBLE_CLAIM_TYPES",
     "AnalysisError",
+    "CandidatePatchStatus",
     "Claim",
     "ClaimType",
     "DocumentationPatch",
@@ -42,11 +50,14 @@ __all__ = [
     "EvidenceCitation",
     "EvidenceSufficiencyGate",
     "Finding",
+    "FixReverificationResult",
     "GroundedLLMClient",
     "GroundedVerificationClient",
     "LLMProvider",
     "PatchLimits",
     "PatchValidationError",
+    "ReExtractionStatus",
+    "ReVerificationStatus",
     "Verdict",
     "VerificationRequest",
     "VerificationResult",
@@ -61,6 +72,7 @@ __all__ = [
     "create_unique_text_patch",
     "extract_markdown",
     "orchestrate_verification",
+    "reverify_candidate_patch",
     "select_impacted_claims",
     "validate_verification_output",
 ]
