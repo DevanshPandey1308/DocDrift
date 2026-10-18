@@ -69,6 +69,14 @@ def make_run(status: RunStatus = RunStatus.PENDING) -> SimpleNamespace:
 
 
 class WorkerTests(unittest.IsolatedAsyncioTestCase):
+    @staticmethod
+    def run_without_event_loop(coroutine: Any) -> Any:
+        try:
+            coroutine.send(None)
+        except StopIteration as completed:
+            return completed.value
+        raise AssertionError("worker test coroutine unexpectedly suspended")
+
     def test_worker_requires_explicit_redis_and_database_configuration(self) -> None:
         with self.assertRaisesRegex(ValueError, "DOCDRIFT_REDIS_URL"):
             worker.create_worker(Settings(database_url="postgresql://db/docdrift"))
@@ -89,6 +97,59 @@ class WorkerTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(instance.redis_settings.database, 3)
         self.assertEqual(instance.max_tries, worker.MAX_JOB_TRIES)
         self.assertEqual(instance.job_timeout_s, worker.JOB_TIMEOUT_SECONDS)
+
+    def test_worker_accepts_optional_fix_and_verification_clients(self) -> None:
+        candidate_client = object()
+        verification_client = object()
+        with patch.object(worker, "Worker") as worker_type:
+            worker.create_worker(
+                Settings(
+                    database_url="postgresql://db/docdrift",
+                    redis_url="redis://redis:6379/0",
+                ),
+                fix_candidate_client=candidate_client,  # type: ignore[arg-type]
+                verification_client=verification_client,  # type: ignore[arg-type]
+            )
+
+        context = worker_type.call_args.kwargs["ctx"]
+        self.assertIs(context["fix_candidate_client"], candidate_client)
+        self.assertIs(context["verification_client"], verification_client)
+
+    def test_process_run_forwards_opt_in_fix_clients_to_analysis_and_publication(self) -> None:
+        factory = FakeSessionFactory(make_run())
+        candidate_client = object()
+        verification_client = object()
+        with (
+            patch.object(
+                worker,
+                "run_analysis_pipeline",
+                new=AsyncMock(return_value=RunStatus.COMPLETED.value),
+            ) as analyze,
+            patch.object(
+                worker,
+                "publish_completed_run",
+                new=AsyncMock(return_value="published"),
+            ) as publish,
+        ):
+            result = self.run_without_event_loop(
+                worker.process_run(
+                    {
+                        "session_factory": factory,
+                        "fix_candidate_client": candidate_client,
+                        "verification_client": verification_client,
+                    },
+                    5,
+                )
+            )
+
+        self.assertEqual(result["publication"], "published")
+        analyze.assert_awaited_once()
+        analysis_options = analyze.call_args.kwargs
+        self.assertIs(analysis_options["fix_candidate_client"], candidate_client)
+        self.assertIs(analysis_options["verification_client"], verification_client)
+        self.assertIsInstance(analysis_options["verified_fix_sink"], list)
+        publish.assert_awaited_once()
+        self.assertEqual(publish.call_args.kwargs["verified_fix_suggestions"], ())
 
     async def test_startup_and_shutdown_manage_database_engine(self) -> None:
         engine = object()

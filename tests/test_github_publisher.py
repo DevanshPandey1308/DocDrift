@@ -3,10 +3,12 @@ from __future__ import annotations
 import json
 import unittest
 from dataclasses import dataclass
+from types import SimpleNamespace
 from typing import Any
 
 import httpx
 import jwt
+from docdrift_core.patches import create_span_patch
 from docdrift_worker.github import (
     ANNOTATION_BATCH_SIZE,
     SUMMARY_MARKER,
@@ -384,6 +386,113 @@ class CheckRunPublisherTests(unittest.IsolatedAsyncioTestCase):
             if request.url.path.endswith("/access_tokens")
         ]
         self.assertEqual(permissions, [{"pull_requests": "write"}, {"pull_requests": "write"}])
+
+    async def test_planner_approved_fix_uses_existing_inline_comment_budget(self) -> None:
+        api = FakeGitHubAPI()
+        publisher = make_publisher(api)
+        finding = FakeFinding(claim_type="default_value")
+        original = "The default timeout is 60."
+        patch = create_span_patch(
+            original + "\n",
+            start_offset=0,
+            end_offset=len(original),
+            expected_original=original,
+            replacement_text="The default timeout is 30.",
+        )
+        suggestion = SimpleNamespace(
+            claim_id=finding.claim_id,
+            finding=SimpleNamespace(
+                claim=SimpleNamespace(
+                    id=finding.claim_id,
+                    document_path=finding.document_path,
+                    line=finding.document_line,
+                ),
+                verdict=SimpleNamespace(value="false"),
+                deterministic=True,
+            ),
+            decision=SimpleNamespace(
+                status="ready",
+                mode="inline_suggestion",
+                patch_delivery_eligible=True,
+                patch=patch,
+                document_path=finding.document_path,
+                document_line=finding.document_line,
+                head_sha="a" * 40,
+            ),
+            replacement_line="The default timeout is 30.",
+        )
+
+        count = await publisher.publish_inline_comments(
+            repository="owner/project",
+            repository_id=58,
+            installation_id=73,
+            pull_request_number=12,
+            base_sha="b" * 40,
+            head_sha="a" * 40,
+            external_id="docdrift:run:4:head:" + "a" * 40,
+            findings=[finding],
+            inline_min_severity="breaking",
+            max_inline_comments=1,
+            verified_fix_suggestions=[suggestion],
+        )
+
+        comment = api.review_comments[("owner/project", 12)][0]
+        self.assertEqual(count, 1)
+        self.assertIn("```suggestion\nThe default timeout is 30.\n```", comment["body"])
+
+    async def test_unapproved_fix_data_falls_back_to_existing_finding_comment(self) -> None:
+        api = FakeGitHubAPI()
+        publisher = make_publisher(api)
+        finding = FakeFinding(claim_type="default_value")
+        original = "The default timeout is 60."
+        patch = create_span_patch(
+            original + "\n",
+            start_offset=0,
+            end_offset=len(original),
+            expected_original=original,
+            replacement_text="The default timeout is 30.",
+        )
+        unapproved = SimpleNamespace(
+            claim_id=finding.claim_id,
+            finding=SimpleNamespace(
+                claim=SimpleNamespace(
+                    id=finding.claim_id,
+                    document_path=finding.document_path,
+                    line=finding.document_line,
+                ),
+                verdict=SimpleNamespace(value="false"),
+                deterministic=True,
+            ),
+            decision=SimpleNamespace(
+                status="refused",
+                mode="annotation_only",
+                patch_delivery_eligible=False,
+                patch=patch,
+                document_path=finding.document_path,
+                document_line=finding.document_line,
+                head_sha="a" * 40,
+            ),
+            replacement_line="The default timeout is 30.",
+        )
+
+        count = await publisher.publish_inline_comments(
+            repository="owner/project",
+            repository_id=58,
+            installation_id=73,
+            pull_request_number=12,
+            base_sha="b" * 40,
+            head_sha="a" * 40,
+            external_id="docdrift:run:4:head:" + "a" * 40,
+            findings=[finding],
+            inline_min_severity="breaking",
+            max_inline_comments=1,
+            verified_fix_suggestions=[unapproved],
+        )
+
+        comment = api.review_comments[("owner/project", 12)][0]
+        self.assertEqual(count, 1)
+        self.assertIn("deterministic documentation mismatch", comment["body"])
+        self.assertNotIn("```suggestion", comment["body"])
 
     async def test_stale_head_and_base_suppress_inline_comments(self) -> None:
         api = FakeGitHubAPI()

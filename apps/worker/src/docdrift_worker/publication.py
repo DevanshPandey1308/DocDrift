@@ -13,6 +13,7 @@ from sqlalchemy import select, text
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 from sqlalchemy.orm import selectinload
 
+from .fix_integration import VerifiedFixSuggestion
 from .github import (
     CheckRunPublisher,
     GitHubAppCheckRunPublisher,
@@ -164,6 +165,7 @@ async def publish_completed_run(
     *,
     settings: Settings | None = None,
     publisher: CheckRunPublisher | None = None,
+    verified_fix_suggestions: tuple[VerifiedFixSuggestion, ...] = (),
 ) -> str:
     """Publish persisted results; never mutate analysis status on publication errors."""
     prepared = await _prepare_publication(session_factory, run_id)
@@ -206,18 +208,21 @@ async def publish_completed_run(
         await _publish_latest_summary(session_factory, prepared, publisher)
         publish_inline = getattr(publisher, "publish_inline_comments", None)
         if publish_inline is not None:
-            await publish_inline(
-                repository=prepared.repository,
-                repository_id=prepared.repository_id,
-                installation_id=prepared.installation_id,
-                pull_request_number=prepared.pull_request_number,
-                base_sha=prepared.base_sha,
-                head_sha=prepared.head_sha,
-                external_id=external_id,
-                findings=prepared.findings,
-                inline_min_severity=prepared.inline_min_severity,
-                max_inline_comments=prepared.max_inline_comments,
-            )
+            inline_arguments = {
+                "repository": prepared.repository,
+                "repository_id": prepared.repository_id,
+                "installation_id": prepared.installation_id,
+                "pull_request_number": prepared.pull_request_number,
+                "base_sha": prepared.base_sha,
+                "head_sha": prepared.head_sha,
+                "external_id": external_id,
+                "findings": prepared.findings,
+                "inline_min_severity": prepared.inline_min_severity,
+                "max_inline_comments": prepared.max_inline_comments,
+            }
+            if verified_fix_suggestions:
+                inline_arguments["verified_fix_suggestions"] = verified_fix_suggestions
+            await publish_inline(**inline_arguments)
     except GitHubPublicationError:
         await _set_publication_status(session_factory, run_id, PublicationStatus.FAILED)
         raise

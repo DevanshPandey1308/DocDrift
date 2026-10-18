@@ -11,6 +11,7 @@ from pathlib import Path
 
 from docdrift_api.models import AnalysisFinding, Run, RunStatus
 from docdrift_core.models import Claim, ClaimType, Evidence, Finding, Verdict
+from docdrift_core.orchestration import GroundedVerificationClient
 from sqlalchemy import delete, select
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 from sqlalchemy.orm import selectinload
@@ -20,6 +21,11 @@ from .checkout import (
     RepositoryCheckoutError,
     changed_markdown_lines,
     changed_python_paths,
+)
+from .fix_integration import (
+    FixCandidateClient,
+    VerifiedFixSuggestion,
+    prepare_verified_fix_suggestions,
 )
 from .noise import FindingExclusions, RepositoryConfigError, load_finding_exclusions
 
@@ -255,6 +261,9 @@ async def run_analysis_pipeline(
     run_id: int,
     *,
     checkout_component: GitHubRepositoryCheckout | None = None,
+    fix_candidate_client: FixCandidateClient | None = None,
+    verification_client: GroundedVerificationClient | None = None,
+    verified_fix_sink: list[VerifiedFixSuggestion] | None = None,
 ) -> str:
     """Analyze impacted claims when exact mapping is safe; otherwise keep the full scan."""
     identity, state = await _claim_run(session_factory, run_id)
@@ -283,6 +292,19 @@ async def run_analysis_pipeline(
             )
             findings = await _analyze_repository(root, changed_paths)
             exclusions = load_finding_exclusions(root, findings)
+            if fix_candidate_client is not None and verified_fix_sink is not None:
+                verified_fix_sink.extend(
+                    await prepare_verified_fix_suggestions(
+                        findings,
+                        root,
+                        candidate_client=fix_candidate_client,
+                        added_markdown_lines=markdown_added_lines,
+                        analyzed_head_sha=identity.head_sha,
+                        current_head_sha=identity.head_sha,
+                        exclusions=exclusions,
+                        verification_client=verification_client,
+                    )
+                )
     except RepositoryCheckoutError:
         raise
     except AnalysisExecutionError:

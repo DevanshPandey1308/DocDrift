@@ -16,6 +16,7 @@ from urllib.parse import urlsplit
 
 import httpx
 import jwt
+from docdrift_core.patches import DocumentationPatch
 
 logger = logging.getLogger(__name__)
 
@@ -159,7 +160,9 @@ def _inline_identity(finding: FindingView, external_id: str) -> str:
     return digest[:32]
 
 
-def _inline_body(finding: FindingView, external_id: str) -> str:
+def _inline_body(
+    finding: FindingView, external_id: str, *, suggestion_line: str | None = None
+) -> str:
     marker = INLINE_COMMENT_MARKER.format(identity=_inline_identity(finding, external_id))
     sources = [
         f"- `{item['path']}:{item['line']}`: {item['snippet'][:1000]}"
@@ -180,6 +183,17 @@ def _inline_body(finding: FindingView, external_id: str) -> str:
     ]
     content = "\n\n".join(_escape_markdown(part) for part in parts)
     suffix = "\n\n" + marker
+    if suggestion_line is not None:
+        suggestion = (
+            "\n\nVerified correction proposal:\n```suggestion\n"
+            + suggestion_line
+            + "\n```"
+        )
+        if len(content) + len(suggestion) + len(suffix) <= MAX_ANNOTATION_MESSAGE:
+            content += suggestion
+        else:
+            # Keep the evidence-backed annotation intact when the suggestion cannot fit.
+            return _inline_body(finding, external_id)
     if len(content) + len(suffix) > MAX_ANNOTATION_MESSAGE:
         content = content[: MAX_ANNOTATION_MESSAGE - len(suffix) - 1] + "…"
     return content + suffix
@@ -214,6 +228,51 @@ def _eligible_inline_findings(
         )
     ]
     return sorted(eligible, key=_finding_sort_key)[:max_inline_comments]
+
+
+def _approved_suggestion_lines(
+    eligible: Sequence[FindingView],
+    candidates: Sequence[object],
+    head_sha: str,
+) -> dict[str, str]:
+    """Resolve only planner-approved single-line replacements for eligible findings."""
+    eligible_by_claim = {finding.claim_id: finding for finding in eligible}
+    suggestions: dict[str, str] = {}
+    for candidate in candidates:
+        decision = getattr(candidate, "decision", None)
+        source_finding = getattr(candidate, "finding", None)
+        claim_id = getattr(candidate, "claim_id", None)
+        line = getattr(candidate, "replacement_line", None)
+        matched = eligible_by_claim.get(claim_id) if isinstance(claim_id, str) else None
+        patch = getattr(decision, "patch", None)
+        source_claim = getattr(source_finding, "claim", None)
+        if not isinstance(patch, DocumentationPatch):
+            continue
+        proposed_lines = patch.proposed_text.splitlines()
+        if (
+            matched is not None
+            and getattr(decision, "status", None) == "ready"
+            and getattr(decision, "mode", None) == "inline_suggestion"
+            and getattr(decision, "patch_delivery_eligible", False) is True
+            and getattr(decision, "head_sha", None) == head_sha.lower()
+            and getattr(decision, "document_path", None) == matched.document_path
+            and getattr(decision, "document_line", None) == matched.document_line
+            and source_claim is not None
+            and getattr(source_claim, "id", None) == claim_id
+            and getattr(source_claim, "document_path", None) == matched.document_path
+            and getattr(source_claim, "line", None) == matched.document_line
+            and getattr(getattr(source_finding, "verdict", None), "value", None) == "false"
+            and getattr(source_finding, "deterministic", False) is True
+            and isinstance(line, str)
+            and 1 <= matched.document_line <= len(proposed_lines)
+            and proposed_lines[matched.document_line - 1] == line
+            and "\n" not in line
+            and "\r" not in line
+            and "```" not in line
+            and len(line) <= 10_000
+        ):
+            suggestions[matched.claim_id] = line
+    return suggestions
 
 
 def build_pr_summary(findings: Sequence[FindingView]) -> str:
@@ -847,8 +906,9 @@ class GitHubAppCheckRunPublisher:
         findings: Sequence[FindingView],
         inline_min_severity: str,
         max_inline_comments: int,
+        verified_fix_suggestions: Sequence[object] = (),
     ) -> int:
-        """Publish bounded plain review comments at previously verified diff lines."""
+        """Publish bounded review comments, using suggestions only for planner-approved fixes."""
         eligible = _eligible_inline_findings(
             findings,
             inline_min_severity=inline_min_severity,
@@ -856,6 +916,9 @@ class GitHubAppCheckRunPublisher:
         )
         if not eligible:
             return 0
+        suggestions = _approved_suggestion_lines(
+            eligible, verified_fix_suggestions, head_sha
+        )
         if (
             not isinstance(base_sha, str)
             or not re.fullmatch(r"[0-9a-fA-F]{40}", base_sha)
@@ -909,7 +972,11 @@ class GitHubAppCheckRunPublisher:
                 marker = INLINE_COMMENT_MARKER.format(
                     identity=_inline_identity(finding, external_id)
                 )
-                comment_body = _inline_body(finding, external_id)
+                comment_body = _inline_body(
+                    finding,
+                    external_id,
+                    suggestion_line=suggestions.get(finding.claim_id),
+                )
                 comment_id = existing.get(marker)
                 if comment_id is None:
                     response = await client.post(

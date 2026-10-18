@@ -10,11 +10,13 @@ from docdrift_api.config import Settings
 from docdrift_api.database import create_session_factory, dispose_engine
 from docdrift_api.models import Run, RunStatus
 from docdrift_api.queue import redis_settings_from_url
+from docdrift_core.orchestration import GroundedVerificationClient
 from sqlalchemy import update
 from sqlalchemy.exc import SQLAlchemyError
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
 from .checkout import RepositoryCheckoutError
+from .fix_integration import FixCandidateClient, VerifiedFixSuggestion
 from .github import GitHubPublicationError
 from .pipeline import run_analysis_pipeline
 from .publication import publish_completed_run
@@ -30,7 +32,12 @@ class RunProcessingError(RuntimeError):
     """Sanitized terminal worker exception that does not expose connection details."""
 
 
-def create_worker(settings: Settings | None = None) -> Worker:
+def create_worker(
+    settings: Settings | None = None,
+    *,
+    fix_candidate_client: FixCandidateClient | None = None,
+    verification_client: GroundedVerificationClient | None = None,
+) -> Worker:
     """Build a worker with explicit Redis settings and DB lifecycle hooks."""
     worker_settings = settings or Settings.from_env()
     redis_settings = redis_settings_from_url(worker_settings.redis_url)
@@ -42,7 +49,12 @@ def create_worker(settings: Settings | None = None) -> Worker:
         redis_settings=redis_settings,
         on_startup=on_startup,
         on_shutdown=on_shutdown,
-        ctx={"database_url": worker_settings.database_url, "settings": worker_settings},
+        ctx={
+            "database_url": worker_settings.database_url,
+            "settings": worker_settings,
+            "fix_candidate_client": fix_candidate_client,
+            "verification_client": verification_client,
+        },
         max_tries=MAX_JOB_TRIES,
         job_timeout=JOB_TIMEOUT_SECONDS,
         keep_result=3600,
@@ -99,10 +111,21 @@ async def process_run(ctx: dict[str, Any], run_id: int) -> dict[str, str | int]:
         raise RuntimeError("Worker database session factory is not initialized.")
 
     try:
+        verified_fix_suggestions: list[VerifiedFixSuggestion] = []
+        analysis_options: dict[str, Any] = {
+            "checkout_component": ctx.get("checkout_component")
+        }
+        candidate_client = ctx.get("fix_candidate_client")
+        if candidate_client is not None:
+            analysis_options.update(
+                fix_candidate_client=candidate_client,
+                verification_client=ctx.get("verification_client"),
+                verified_fix_sink=verified_fix_suggestions,
+            )
         state = await run_analysis_pipeline(
             session_factory,
             run_id,
-            checkout_component=ctx.get("checkout_component"),
+            **analysis_options,
         )
     except (SQLAlchemyError, OSError, TimeoutError, RepositoryCheckoutError) as error:
         attempt = _attempt_number(ctx)
@@ -127,6 +150,7 @@ async def process_run(ctx: dict[str, Any], run_id: int) -> dict[str, str | int]:
                 run_id,
                 settings=ctx.get("settings"),
                 publisher=ctx.get("publisher_component"),
+                verified_fix_suggestions=tuple(verified_fix_suggestions),
             )
         except GitHubPublicationError as error:
             attempt = _attempt_number(ctx)
