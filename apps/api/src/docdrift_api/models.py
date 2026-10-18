@@ -99,6 +99,12 @@ class Run(TimestampMixin, Base):
     pull_request_number: Mapped[int] = mapped_column(Integer, nullable=False)
     head_sha: Mapped[str] = mapped_column(String(128), nullable=False)
     base_sha: Mapped[str | None] = mapped_column(String(128), nullable=True)
+    inline_min_severity: Mapped[str] = mapped_column(
+        String(32), nullable=False, default="breaking", server_default="breaking"
+    )
+    max_inline_comments: Mapped[int] = mapped_column(
+        Integer, nullable=False, default=5, server_default="5"
+    )
     status: Mapped[RunStatus] = mapped_column(
         Enum(RunStatus, name="run_status", values_callable=lambda enum: [item.value for item in enum]),
         nullable=False,
@@ -140,6 +146,7 @@ class AnalysisFinding(TimestampMixin, Base):
     claim_text: Mapped[str] = mapped_column(Text, nullable=False)
     document_path: Mapped[str] = mapped_column(String(1024), nullable=False)
     document_line: Mapped[int] = mapped_column(Integer, nullable=False)
+    inline_comment_line: Mapped[int | None] = mapped_column(Integer, nullable=True)
     span_start: Mapped[int] = mapped_column(Integer, nullable=False)
     span_end: Mapped[int] = mapped_column(Integer, nullable=False)
     verdict: Mapped[str] = mapped_column(String(32), nullable=False)

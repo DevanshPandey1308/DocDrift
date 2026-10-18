@@ -43,6 +43,9 @@ class PersistenceSchemaTests(unittest.TestCase):
         self.assertEqual(runs.c.base_sha.nullable, True)
         self.assertEqual(findings.c.ignored.nullable, False)
         self.assertEqual(findings.c.ignore_reason.nullable, True)
+        self.assertEqual(runs.c.inline_min_severity.nullable, False)
+        self.assertEqual(runs.c.max_inline_comments.nullable, False)
+        self.assertEqual(findings.c.inline_comment_line.nullable, True)
         self.assertIn("installations.id", {
             next(iter(column.foreign_keys)).target_fullname
             for column in repositories.columns
@@ -65,7 +68,7 @@ class PersistenceSchemaTests(unittest.TestCase):
         script = ScriptDirectory.from_config(config)
         revision = script.get_current_head()
 
-        self.assertEqual(revision, "0005_impact_and_noise_controls")
+        self.assertEqual(revision, "0006_inline_review_locations")
         self.assertIn(RunStatus.AWAITING_ANALYSIS, tuple(RunStatus))
         self.assertTrue((ROOT / "apps/api/migrations/env.py").is_file())
         self.assertEqual(AnalysisFinding.__tablename__, "analysis_findings")

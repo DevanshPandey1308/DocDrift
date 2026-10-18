@@ -12,6 +12,7 @@ from docdrift_worker.github import (
     SUMMARY_MARKER,
     GitHubAppCheckRunPublisher,
     GitHubPublicationError,
+    _eligible_inline_findings,
     build_check_summary,
     build_pr_summary,
     classify_severity,
@@ -31,6 +32,9 @@ class FakeFinding:
     )
     ignored: bool = False
     ignore_reason: str | None = None
+    claim_id: str = "0123456789abcdef"
+    deterministic: bool = True
+    inline_comment_line: int | None = 8
 
 
 class FakeGitHubAPI:
@@ -41,11 +45,73 @@ class FakeGitHubAPI:
         self.fail_check_creation = False
         self.comments: dict[tuple[str, int], list[dict[str, Any]]] = {}
         self.next_comment_id = 400
+        self.review_comments: dict[tuple[str, int], list[dict[str, Any]]] = {}
+        self.pull_revisions: dict[int, dict[str, Any]] = {}
+        self.default_head_sha = "a" * 40
+        self.default_base_sha = "b" * 40
+        self.reject_inline_positions = False
+        self.fail_inline_permission = False
+        self.advance_head_after_inline_comment = False
 
     async def __call__(self, request: httpx.Request) -> httpx.Response:
         self.requests.append(request)
         if request.url.path.endswith("/access_tokens"):
             return httpx.Response(201, json={"token": "installation-token"}, request=request)
+        if "/pulls/" in request.url.path and request.url.path.count("/") >= 5:
+            parts = request.url.path.split("/")
+            if parts[-2].isdecimal() and parts[-1] == "comments":
+                key = ("/".join(parts[2:4]), int(parts[-2]))
+                if request.method == "GET":
+                    return httpx.Response(
+                        200, json=self.review_comments.get(key, []), request=request
+                    )
+                if request.method == "POST":
+                    if self.fail_inline_permission:
+                        return httpx.Response(403, request=request)
+                    if self.reject_inline_positions:
+                        return httpx.Response(422, request=request)
+                    body = json.loads(request.content)
+                    self.next_comment_id += 1
+                    comment = {
+                        "id": self.next_comment_id,
+                        "body": body["body"],
+                        "path": body["path"],
+                        "line": body["line"],
+                        "side": body["side"],
+                        "user": {"type": "Bot", "login": "docdrift[bot]"},
+                    }
+                    self.review_comments.setdefault(key, []).append(comment)
+                    if self.advance_head_after_inline_comment:
+                        self.pull_revisions[key[1]] = {
+                            "head": {"sha": "c" * 40},
+                            "base": {"sha": self.default_base_sha},
+                            "state": "open",
+                        }
+                    return httpx.Response(201, json=comment, request=request)
+            if parts[-2] == "pulls" and parts[-1].isdecimal() and request.method == "GET":
+                number = int(parts[-1])
+                return httpx.Response(
+                    200,
+                    json=self.pull_revisions.get(
+                        number,
+                        {
+                            "head": {"sha": self.default_head_sha},
+                            "base": {"sha": self.default_base_sha},
+                            "state": "open",
+                        },
+                    ),
+                    request=request,
+                )
+        if "/pulls/comments/" in request.url.path and request.method == "PATCH":
+            comment_id = int(request.url.path.rsplit("/", 1)[-1])
+            comment = next(
+                item
+                for comments in self.review_comments.values()
+                for item in comments
+                if item["id"] == comment_id
+            )
+            comment["body"] = json.loads(request.content)["body"]
+            return httpx.Response(200, json=comment, request=request)
         if request.method == "GET" and request.url.path.endswith("/check-runs"):
             head_sha = request.url.path.split("/commits/", 1)[1].split("/check-runs", 1)[0]
             check = self.checks.get(head_sha)
@@ -142,6 +208,21 @@ class CheckRunSummaryTests(unittest.TestCase):
         self.assertEqual(summary.conclusion, "failure")
         self.assertEqual(summary.annotations, ())
         self.assertEqual(summary.omitted_annotations, 1)
+
+    def test_inline_selection_requires_an_exact_safe_changed_line_and_evidence(self) -> None:
+        findings = [
+            FakeFinding(inline_comment_line=None),
+            FakeFinding(inline_comment_line=7),
+            FakeFinding(document_path="../guide.md"),
+            FakeFinding(evidence=()),
+            FakeFinding(verdict="unverifiable"),
+        ]
+
+        selected = _eligible_inline_findings(
+            findings, inline_min_severity="breaking", max_inline_comments=5
+        )
+
+        self.assertEqual(selected, [])
 
     def test_only_unverifiable_findings_are_neutral(self) -> None:
         self.assertEqual(
@@ -248,6 +329,183 @@ class CheckRunPublisherTests(unittest.IsolatedAsyncioTestCase):
             if request.url.path.endswith("/access_tokens")
         ]
         self.assertEqual(token_bodies[-1]["permissions"], {"pull_requests": "write"})
+
+    async def test_inline_comments_use_diff_line_api_and_retry_updates_stable_comment(self) -> None:
+        api = FakeGitHubAPI()
+        publisher = make_publisher(api)
+        arguments = {
+            "repository": "owner/project",
+            "repository_id": 58,
+            "installation_id": 73,
+            "pull_request_number": 12,
+            "base_sha": "b" * 40,
+            "head_sha": "a" * 40,
+            "external_id": "docdrift:run:4:head:" + "a" * 40,
+            "findings": [FakeFinding(claim_type="cli_flag")],
+            "inline_min_severity": "breaking",
+            "max_inline_comments": 5,
+        }
+
+        first = await publisher.publish_inline_comments(**arguments)
+        second = await publisher.publish_inline_comments(**arguments)
+
+        self.assertEqual((first, second), (1, 1))
+        comments = api.review_comments[("owner/project", 12)]
+        self.assertEqual(len(comments), 1)
+        self.assertEqual(comments[0]["path"], "docs/guide.md")
+        self.assertEqual(comments[0]["line"], 8)
+        self.assertEqual(comments[0]["side"], "RIGHT")
+        self.assertIn("deterministic documentation mismatch", comments[0]["body"])
+        self.assertIn("src/settings", comments[0]["body"])
+        self.assertRegex(comments[0]["body"], r"<!-- docdrift-inline:v1:[0-9a-f]{32} -->")
+        self.assertEqual(
+            len(
+                [
+                    request
+                    for request in api.requests
+                    if request.method == "POST" and request.url.path.endswith("/pulls/12/comments")
+                ]
+            ),
+            1,
+        )
+        self.assertEqual(
+            len(
+                [
+                    request
+                    for request in api.requests
+                    if request.method == "PATCH" and "/pulls/comments/" in request.url.path
+                ]
+            ),
+            1,
+        )
+        permissions = [
+            json.loads(request.content)["permissions"]
+            for request in api.requests
+            if request.url.path.endswith("/access_tokens")
+        ]
+        self.assertEqual(permissions, [{"pull_requests": "write"}, {"pull_requests": "write"}])
+
+    async def test_stale_head_and_base_suppress_inline_comments(self) -> None:
+        api = FakeGitHubAPI()
+        api.pull_revisions[12] = {
+            "head": {"sha": "c" * 40},
+            "base": {"sha": "b" * 40},
+            "state": "open",
+        }
+        publisher = make_publisher(api)
+        count = await publisher.publish_inline_comments(
+            repository="owner/project",
+            repository_id=58,
+            installation_id=73,
+            pull_request_number=12,
+            base_sha="b" * 40,
+            head_sha="a" * 40,
+            external_id="docdrift:run:4:head:" + "a" * 40,
+            findings=[FakeFinding(claim_type="cli_flag")],
+            inline_min_severity="breaking",
+            max_inline_comments=5,
+        )
+
+        self.assertEqual(count, 0)
+        self.assertFalse(any(request.method == "POST" and request.url.path.endswith("/comments") for request in api.requests))
+
+    async def test_head_update_during_batch_stops_further_inline_comments(self) -> None:
+        api = FakeGitHubAPI()
+        api.advance_head_after_inline_comment = True
+        publisher = make_publisher(api)
+        count = await publisher.publish_inline_comments(
+            repository="owner/project",
+            repository_id=58,
+            installation_id=73,
+            pull_request_number=12,
+            base_sha="b" * 40,
+            head_sha="a" * 40,
+            external_id="docdrift:run:4:head:" + "a" * 40,
+            findings=[
+                FakeFinding(claim_type="cli_flag", claim_id="1" * 16),
+                FakeFinding(claim_type="cli_flag", claim_id="2" * 16, document_line=9, inline_comment_line=9),
+            ],
+            inline_min_severity="breaking",
+            max_inline_comments=5,
+        )
+
+        self.assertEqual(count, 1)
+        self.assertEqual(len(api.review_comments[("owner/project", 12)]), 1)
+
+    async def test_severity_budget_and_ignored_findings_filter_inline_publication(self) -> None:
+        api = FakeGitHubAPI()
+        publisher = make_publisher(api)
+        findings = [
+            FakeFinding(claim_type="cli_flag", claim_id="1" * 16, claim_text="Removed --old flag."),
+            FakeFinding(claim_type="default_value", claim_id="2" * 16, claim_text="Default changed."),
+            FakeFinding(claim_type="cli_flag", claim_id="3" * 16, ignored=True, claim_text="Ignored flag."),
+            FakeFinding(claim_type="cli_flag", claim_id="4" * 16, verdict="unverifiable", claim_text="Unclear flag."),
+        ]
+        common = {
+            "repository": "owner/project",
+            "repository_id": 58,
+            "installation_id": 73,
+            "pull_request_number": 12,
+            "base_sha": "b" * 40,
+            "head_sha": "a" * 40,
+            "external_id": "docdrift:run:4:head:" + "a" * 40,
+            "findings": findings,
+            "inline_min_severity": "breaking",
+        }
+
+        count = await publisher.publish_inline_comments(**common, max_inline_comments=1)
+        no_budget = await publisher.publish_inline_comments(**common, max_inline_comments=0)
+
+        self.assertEqual(count, 1)
+        self.assertEqual(no_budget, 0)
+        self.assertEqual(len(api.review_comments[("owner/project", 12)]), 1)
+        body = api.review_comments[("owner/project", 12)][0]["body"]
+        self.assertIn("old flag", body)
+        self.assertNotIn("Default changed", body)
+        self.assertNotIn("Ignored flag", body)
+        self.assertNotIn("Unclear flag", body)
+
+    async def test_rejected_position_keeps_finding_in_check_run_and_summary_fallbacks(self) -> None:
+        api = FakeGitHubAPI()
+        api.reject_inline_positions = True
+        publisher = make_publisher(api)
+        finding = FakeFinding(claim_type="cli_flag")
+        count = await publisher.publish_inline_comments(
+            repository="owner/project",
+            repository_id=58,
+            installation_id=73,
+            pull_request_number=12,
+            base_sha="b" * 40,
+            head_sha="a" * 40,
+            external_id="docdrift:run:4:head:" + "a" * 40,
+            findings=[finding],
+            inline_min_severity="breaking",
+            max_inline_comments=5,
+        )
+
+        self.assertEqual(count, 0)
+        self.assertEqual(build_check_summary([finding]).conclusion, "failure")
+        self.assertIn("The default timeout", build_pr_summary([finding]))
+
+    async def test_inline_permission_failure_is_sanitized(self) -> None:
+        api = FakeGitHubAPI()
+        api.fail_inline_permission = True
+        publisher = make_publisher(api)
+        with self.assertRaises(GitHubPublicationError) as raised:
+            await publisher.publish_inline_comments(
+                repository="owner/project",
+                repository_id=58,
+                installation_id=73,
+                pull_request_number=12,
+                base_sha="b" * 40,
+                head_sha="a" * 40,
+                external_id="docdrift:run:4:head:" + "a" * 40,
+                findings=[FakeFinding(claim_type="cli_flag")],
+                inline_min_severity="breaking",
+                max_inline_comments=5,
+            )
+        self.assertIn("HTTP 403", str(raised.exception))
+        self.assertNotIn("installation-token", str(raised.exception))
 
     def test_severity_and_summary_order_are_deterministic_and_ignored_findings_stay_inactive(self) -> None:
         breaking = FakeFinding(

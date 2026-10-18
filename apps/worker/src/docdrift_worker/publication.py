@@ -32,6 +32,9 @@ class PublicationInput:
     head_sha: str
     check_run_id: int | None
     findings: tuple[AnalysisFinding, ...]
+    base_sha: str | None = None
+    inline_min_severity: str = "breaking"
+    max_inline_comments: int = 5
 
 
 async def _prepare_publication(
@@ -81,7 +84,10 @@ async def _prepare_publication(
                 else None
             ),
             pull_request_number=run.pull_request_number,
+            base_sha=getattr(run, "base_sha", None),
             head_sha=run.head_sha,
+            inline_min_severity=getattr(run, "inline_min_severity", "breaking"),
+            max_inline_comments=getattr(run, "max_inline_comments", 5),
             check_run_id=run.github_check_run_id,
             findings=tuple(run.findings),
         )
@@ -198,6 +204,20 @@ async def publish_completed_run(
             check_run_id=prepared.check_run_id,
         )
         await _publish_latest_summary(session_factory, prepared, publisher)
+        publish_inline = getattr(publisher, "publish_inline_comments", None)
+        if publish_inline is not None:
+            await publish_inline(
+                repository=prepared.repository,
+                repository_id=prepared.repository_id,
+                installation_id=prepared.installation_id,
+                pull_request_number=prepared.pull_request_number,
+                base_sha=prepared.base_sha,
+                head_sha=prepared.head_sha,
+                external_id=external_id,
+                findings=prepared.findings,
+                inline_min_severity=prepared.inline_min_severity,
+                max_inline_comments=prepared.max_inline_comments,
+            )
     except GitHubPublicationError:
         await _set_publication_status(session_factory, run_id, PublicationStatus.FAILED)
         raise

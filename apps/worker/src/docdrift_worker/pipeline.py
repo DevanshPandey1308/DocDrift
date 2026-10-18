@@ -15,7 +15,12 @@ from sqlalchemy import delete, select
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 from sqlalchemy.orm import selectinload
 
-from .checkout import GitHubRepositoryCheckout, RepositoryCheckoutError, changed_python_paths
+from .checkout import (
+    GitHubRepositoryCheckout,
+    RepositoryCheckoutError,
+    changed_markdown_lines,
+    changed_python_paths,
+)
 from .noise import FindingExclusions, RepositoryConfigError, load_finding_exclusions
 
 logger = logging.getLogger(__name__)
@@ -77,7 +82,10 @@ async def _claim_run(
 
 
 def _finding_record(
-    run_id: int, finding: Finding, ignore_reason: str | None = None
+    run_id: int,
+    finding: Finding,
+    ignore_reason: str | None = None,
+    inline_comment_line: int | None = None,
 ) -> AnalysisFinding:
     """Convert the shared core result without changing its verdict or evidence."""
     try:
@@ -99,6 +107,7 @@ def _finding_record(
         claim_text=claim.text,
         document_path=claim.document_path,
         document_line=claim.line,
+        inline_comment_line=inline_comment_line,
         span_start=claim.span_start,
         span_end=claim.span_end,
         verdict=finding.verdict.value,
@@ -208,6 +217,7 @@ async def _persist_findings_and_complete(
     run_id: int,
     findings: list[Finding],
     exclusions: FindingExclusions | None = None,
+    markdown_added_lines: dict[str, frozenset[int]] | None = None,
 ) -> str:
     """Replace results and mark the run complete atomically, only while it is active."""
     records = [
@@ -217,6 +227,10 @@ async def _persist_findings_and_complete(
             (exclusions or FindingExclusions()).reason_for(
                 finding.claim.id, finding.claim.document_path
             ),
+            finding.claim.line
+            if finding.claim.line
+            in (markdown_added_lines or {}).get(finding.claim.document_path, frozenset())
+            else None,
         )
         for finding in findings
     ]
@@ -226,6 +240,9 @@ async def _persist_findings_and_complete(
             return "missing"
         if run.status != RunStatus.RUNNING:
             return run.status.value
+        config = exclusions or FindingExclusions()
+        run.inline_min_severity = config.inline_min
+        run.max_inline_comments = config.max_inline_comments
         await session.execute(delete(AnalysisFinding).where(AnalysisFinding.run_id == run_id))
         session.add_all(records)
         run.status = RunStatus.COMPLETED
@@ -261,8 +278,11 @@ async def run_analysis_pipeline(
             changed_paths = await changed_python_paths(
                 root, identity.base_sha, identity.head_sha
             )
+            markdown_added_lines = await changed_markdown_lines(
+                root, identity.base_sha, identity.head_sha
+            )
             findings = await _analyze_repository(root, changed_paths)
-            exclusions = load_finding_exclusions(root)
+            exclusions = load_finding_exclusions(root, findings)
     except RepositoryCheckoutError:
         raise
     except AnalysisExecutionError:
@@ -272,4 +292,6 @@ async def run_analysis_pipeline(
     except (OSError, UnicodeError, ValueError) as error:
         raise AnalysisExecutionError("Deterministic analysis could not read the checked-out repository.") from error
 
-    return await _persist_findings_and_complete(session_factory, run_id, findings, exclusions)
+    return await _persist_findings_and_complete(
+        session_factory, run_id, findings, exclusions, markdown_added_lines
+    )

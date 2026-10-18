@@ -13,6 +13,146 @@ from pathlib import Path, PurePosixPath
 
 _REPOSITORY_COMPONENT = re.compile(r"^[A-Za-z0-9][A-Za-z0-9_.-]{0,99}$")
 _COMMIT_SHA = re.compile(r"^[0-9a-fA-F]{40}$")
+_DIFF_HUNK = re.compile(r"^@@ -(\d+)(?:,(\d+))? \+(\d+)(?:,(\d+))? @@(?: .*)?$")
+
+
+def parse_added_markdown_lines(diff: str) -> dict[str, frozenset[int]] | None:
+    """Map only unambiguous added Markdown lines from a unified diff.
+
+    This deliberately asks Git for a no-renames patch: a renamed document is represented
+    as a deletion plus an addition, so anchors always refer to the new repository path.
+    Any malformed or unsupported patch makes the whole map unavailable.
+    """
+    if not isinstance(diff, str):
+        return None
+    if not diff:
+        return {}
+
+    added: dict[str, set[int]] = {}
+    current_path: str | None = None
+    has_new_path_header = False
+    old_remaining = new_remaining = 0
+    old_line = new_line = 0
+    in_hunk = False
+
+    for raw_line in diff.splitlines():
+        if raw_line.startswith("diff --git "):
+            if in_hunk and (old_remaining or new_remaining):
+                return None
+            current_path = None
+            has_new_path_header = False
+            in_hunk = False
+            continue
+        if not in_hunk and raw_line.startswith("+++ "):
+            if has_new_path_header:
+                return None
+            path = raw_line[4:]
+            has_new_path_header = True
+            if path == "/dev/null":
+                current_path = None
+                continue
+            if not path.startswith("b/"):
+                return None
+            path = path[2:]
+            parsed = PurePosixPath(path)
+            if (
+                not path
+                or "\\" in path
+                or "\x00" in path
+                or ":" in path
+                or parsed.is_absolute()
+                or str(parsed) != path
+                or any(part in {".", ".."} for part in parsed.parts)
+            ):
+                return None
+            current_path = path if path.lower().endswith((".md", ".markdown")) else None
+            continue
+        if raw_line.startswith("@@ "):
+            if not has_new_path_header:
+                return None
+            if in_hunk and (old_remaining or new_remaining):
+                return None
+            match = _DIFF_HUNK.fullmatch(raw_line)
+            if match is None:
+                return None
+            old_line = int(match.group(1))
+            old_remaining = int(match.group(2) or "1")
+            new_line = int(match.group(3))
+            new_remaining = int(match.group(4) or "1")
+            in_hunk = True
+            continue
+        if not in_hunk:
+            # Git metadata is allowed outside hunks; source text is not.
+            if raw_line.startswith(("+", "-", " ")) and not raw_line.startswith(("+++", "---")):
+                return None
+            continue
+        if raw_line.startswith("\\"):
+            continue
+        if not raw_line:
+            return None
+        marker = raw_line[0]
+        if marker == " ":
+            old_line += 1
+            new_line += 1
+            old_remaining -= 1
+            new_remaining -= 1
+        elif marker == "-":
+            old_line += 1
+            old_remaining -= 1
+        elif marker == "+":
+            if current_path is not None:
+                added.setdefault(current_path, set()).add(new_line)
+            new_line += 1
+            new_remaining -= 1
+        else:
+            return None
+        if old_remaining < 0 or new_remaining < 0:
+            return None
+
+    if in_hunk and (old_remaining or new_remaining):
+        return None
+    return {path: frozenset(lines) for path, lines in added.items()}
+
+
+async def changed_markdown_lines(
+    repository_path: Path, base_sha: str | None, head_sha: str
+) -> dict[str, frozenset[int]] | None:
+    """Get exact added Markdown lines from the pinned base-to-head Git diff."""
+    if (
+        not isinstance(base_sha, str)
+        or not _COMMIT_SHA.fullmatch(base_sha)
+        or not isinstance(head_sha, str)
+        or not _COMMIT_SHA.fullmatch(head_sha)
+    ):
+        return None
+    git = shutil.which("git")
+    if git is None:
+        return None
+    try:
+        output = await _run_command(
+            git,
+            [
+                "-c",
+                "core.quotepath=false",
+                "-C",
+                str(repository_path),
+                "diff",
+                "--no-ext-diff",
+                "--no-color",
+                "--no-renames",
+                "--unified=0",
+                base_sha.lower(),
+                head_sha.lower(),
+                "--",
+                "*.md",
+                "*.markdown",
+            ],
+            cwd=repository_path,
+            timeout_seconds=15.0,
+        )
+    except (RepositoryCheckoutError, CheckoutTimeoutError, OSError):
+        return None
+    return parse_added_markdown_lines(output)
 
 
 class RepositoryCheckoutError(RuntimeError):

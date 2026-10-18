@@ -73,6 +73,7 @@ def make_run() -> SimpleNamespace:
         repository=SimpleNamespace(full_name="owner/project"),
         pull_request_number=17,
         head_sha="a" * 40,
+        base_sha=None,
         status=RunStatus.PENDING,
     )
 
@@ -145,6 +146,46 @@ class AnalysisPipelineTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(persisted.evidence[0]["path"], "src/api.py")
         self.assertEqual(persisted.evidence[0]["line"], 1)
         self.assertIn("timeout=60", persisted.evidence[0]["snippet"])
+
+    async def test_added_document_line_is_persisted_as_safe_anchor_and_marker_is_traceable(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            temporary_path = Path(temporary)
+            source = temporary_path / "source"
+            base_sha, head_sha = create_git_repository(
+                source,
+                (
+                    {
+                        "README.md": "# API\n",
+                        "src/api.py": "def connect(timeout=60):\n    return timeout\n",
+                    },
+                    {
+                        "README.md": "# API\n<!-- docdrift-ignore -->\n"
+                        "The default timeout is 30.\n",
+                        "src/api.py": "def connect(timeout=60):\n    return timeout\n",
+                    },
+                ),
+            )
+            session_factory = FakeSessionFactory(make_run())
+            session_factory.session.run.head_sha = head_sha
+            session_factory.session.run.base_sha = base_sha
+            checkout = GitHubRepositoryCheckout(
+                remote_url_factory=lambda _name: str(source),
+                temporary_parent=temporary_path / "checkouts",
+            )
+
+            result = await run_analysis_pipeline(
+                session_factory, 31, checkout_component=checkout
+            )
+
+        self.assertEqual(result, RunStatus.COMPLETED.value)
+        self.assertEqual(len(session_factory.session.findings), 1)
+        finding = session_factory.session.findings[0]
+        self.assertEqual(finding.document_line, 3)
+        self.assertEqual(finding.inline_comment_line, 3)
+        self.assertTrue(finding.ignored)
+        self.assertEqual(finding.ignore_reason, "ignored by <!-- docdrift-ignore --> on line 2")
+        self.assertEqual(session_factory.session.run.inline_min_severity, "breaking")
+        self.assertEqual(session_factory.session.run.max_inline_comments, 5)
 
     async def test_completed_retry_is_a_no_op_and_does_not_duplicate_findings(self) -> None:
         with tempfile.TemporaryDirectory() as temporary:

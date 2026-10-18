@@ -4,8 +4,11 @@ from __future__ import annotations
 
 import json
 import re
+from collections.abc import Iterable
 from dataclasses import dataclass
 from pathlib import Path, PurePosixPath
+
+from docdrift_core.models import Finding
 
 MAX_CONFIG_BYTES = 64 * 1024
 _PLAIN_SCALAR = re.compile(r"^[A-Za-z0-9_./*() -]+$")
@@ -21,6 +24,7 @@ class FindingExclusions:
     claim_reasons: dict[str, str] | None = None
     inline_min: str = "breaking"
     max_inline_comments: int = 5
+    marker_reasons: dict[str, str] | None = None
 
     def reason_for(self, claim_id: str, document_path: str) -> str | None:
         reasons = self.claim_reasons or {}
@@ -29,7 +33,7 @@ class FindingExclusions:
         for pattern in self.document_patterns:
             if PurePosixPath(document_path).match(pattern):
                 return f"excluded by docs.exclude pattern {pattern!r}"
-        return None
+        return (self.marker_reasons or {}).get(claim_id)
 
 
 def _split_field(text: str) -> tuple[str, str]:
@@ -190,30 +194,35 @@ def _path_pattern(value: object) -> str:
     return value
 
 
-def load_finding_exclusions(repository_root: Path) -> FindingExclusions:
-    """Read and validate .docdrift.yml without supporting executable YAML features."""
+def load_finding_exclusions(
+    repository_root: Path, analysis_findings: Iterable[Finding] = ()
+) -> FindingExclusions:
+    """Read validated exclusions and exact-line Markdown ignore markers."""
     root = repository_root.resolve()
     config_path = root / ".docdrift.yml"
+    data: dict[str, object] = {}
     try:
         resolved_path = config_path.resolve(strict=True)
     except FileNotFoundError:
-        return FindingExclusions()
+        resolved_path = None
     except OSError as error:
         raise RepositoryConfigError(".docdrift.yml could not be resolved safely.") from error
-    if not resolved_path.is_relative_to(root) or not resolved_path.is_file():
-        raise RepositoryConfigError(".docdrift.yml must be a regular file inside the repository.")
-    try:
-        if resolved_path.stat().st_size > MAX_CONFIG_BYTES:
-            raise RepositoryConfigError(".docdrift.yml exceeds the 64 KiB size limit.")
-        content = resolved_path.read_text(encoding="utf-8")
-    except RepositoryConfigError:
-        raise
-    except (OSError, UnicodeError) as error:
-        raise RepositoryConfigError(".docdrift.yml could not be read as UTF-8.") from error
-    data = _parse_subset(content)
-
-    if "version" not in data or set(data) - {"version", "docs", "findings", "severity"}:
-        raise RepositoryConfigError(".docdrift.yml requires version: 1 and supports only docs/findings/severity.")
+    if resolved_path is not None:
+        if not resolved_path.is_relative_to(root) or not resolved_path.is_file():
+            raise RepositoryConfigError(".docdrift.yml must be a regular file inside the repository.")
+        try:
+            if resolved_path.stat().st_size > MAX_CONFIG_BYTES:
+                raise RepositoryConfigError(".docdrift.yml exceeds the 64 KiB size limit.")
+            content = resolved_path.read_text(encoding="utf-8")
+        except RepositoryConfigError:
+            raise
+        except (OSError, UnicodeError) as error:
+            raise RepositoryConfigError(".docdrift.yml could not be read as UTF-8.") from error
+        data = _parse_subset(content)
+        if "version" not in data or set(data) - {"version", "docs", "findings", "severity"}:
+            raise RepositoryConfigError(
+                ".docdrift.yml requires version: 1 and supports only docs/findings/severity."
+            )
     docs = data.get("docs", {})
     if not isinstance(docs, dict):
         raise RepositoryConfigError("docs must be a mapping.")
@@ -257,4 +266,41 @@ def load_finding_exclusions(repository_root: Path) -> FindingExclusions:
         or not 0 <= max_inline_comments <= 50
     ):
         raise RepositoryConfigError("severity.max_inline_comments must be an integer from 0 to 50.")
-    return FindingExclusions(patterns, reasons, inline_min, max_inline_comments)
+    marker_reasons: dict[str, str] = {}
+    document_cache: dict[str, list[str]] = {}
+    marker = "<!-- docdrift-ignore -->"
+    for finding in analysis_findings:
+        claim = finding.claim
+        path = claim.document_path
+        if (
+            claim.line < 2
+            or not isinstance(path, str)
+            or "\\" in path
+            or "\x00" in path
+            or ":" in path
+            or not path.lower().endswith((".md", ".markdown"))
+        ):
+            continue
+        relative = PurePosixPath(path)
+        if relative.is_absolute() or any(part in {".", ".."} for part in relative.parts):
+            continue
+        resolved_document = (root / Path(*relative.parts)).resolve()
+        if not resolved_document.is_relative_to(root) or not resolved_document.is_file():
+            continue
+        if path not in document_cache:
+            try:
+                document_cache[path] = resolved_document.read_text(encoding="utf-8").splitlines()
+            except (OSError, UnicodeError):
+                continue
+        lines = document_cache[path]
+        marker_index = claim.line - 2
+        if marker_index < len(lines) and lines[marker_index].strip() == marker:
+            marker_reasons[claim.id] = f"ignored by {marker} on line {claim.line - 1}"
+
+    return FindingExclusions(
+        document_patterns=patterns,
+        claim_reasons=reasons,
+        inline_min=inline_min,
+        max_inline_comments=max_inline_comments,
+        marker_reasons=marker_reasons,
+    )

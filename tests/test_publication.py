@@ -58,6 +58,61 @@ class FakeSessionFactory:
 
 
 class PublicationLifecycleTests(unittest.IsolatedAsyncioTestCase):
+    async def test_completed_publication_forwards_pinned_revisions_and_inline_budget(self) -> None:
+        prepared = PublicationInput(
+            run_id=10,
+            repository="owner/project",
+            repository_id=58,
+            installation_id=73,
+            pull_request_number=3,
+            head_sha="a" * 40,
+            check_run_id=None,
+            findings=(),
+            base_sha="b" * 40,
+            inline_min_severity="misleading",
+            max_inline_comments=2,
+        )
+        publisher = SimpleNamespace(
+            publish=AsyncMock(return_value=901),
+            publish_inline_comments=AsyncMock(return_value=1),
+        )
+        completed = SimpleNamespace(
+            id=10,
+            status=RunStatus.COMPLETED,
+            repository_id=4,
+            pull_request_number=3,
+            publication_status=PublicationStatus.PENDING.value,
+            github_check_run_id=None,
+        )
+        factory = FakeSessionFactory(FakeSession([completed, None]))
+        with (
+            patch(
+                "docdrift_worker.publication._prepare_publication",
+                new=AsyncMock(return_value=prepared),
+            ),
+            patch(
+                "docdrift_worker.publication._publish_latest_summary",
+                new=AsyncMock(return_value="published"),
+            ),
+        ):
+            status = await publish_completed_run(
+                factory, 10, settings=Settings(), publisher=publisher  # type: ignore[arg-type]
+            )
+
+        self.assertEqual(status, PublicationStatus.PUBLISHED.value)
+        publisher.publish_inline_comments.assert_awaited_once_with(
+            repository="owner/project",
+            repository_id=58,
+            installation_id=73,
+            pull_request_number=3,
+            base_sha="b" * 40,
+            head_sha="a" * 40,
+            external_id="docdrift:run:10:head:" + "a" * 40,
+            findings=(),
+            inline_min_severity="misleading",
+            max_inline_comments=2,
+        )
+
     async def test_summary_error_marks_publication_failed_after_check_run_without_analysis_failure(self) -> None:
         prepared = PublicationInput(
             run_id=10,

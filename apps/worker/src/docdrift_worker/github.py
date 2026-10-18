@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import hashlib
 import logging
 import re
 import time
@@ -21,6 +22,7 @@ logger = logging.getLogger(__name__)
 GITHUB_API = "https://api.github.com"
 CHECK_NAME = "DocDrift"
 SUMMARY_MARKER = "<!-- docdrift-summary:v1 -->"
+INLINE_COMMENT_MARKER = "<!-- docdrift-inline:v1:{identity} -->"
 ANNOTATION_BATCH_SIZE = 50
 MAX_ANNOTATIONS = 1000
 MAX_ANNOTATION_MESSAGE = 10_000
@@ -41,12 +43,14 @@ class GitHubPublicationError(RuntimeError):
 
 
 class FindingView(Protocol):
+    claim_id: str
     verdict: str
     claim_type: str
     claim_text: str
     explanation: str
     document_path: str
     document_line: int
+    inline_comment_line: int | None
 
     @property
     def evidence(self) -> Sequence[object]: ...
@@ -111,6 +115,92 @@ def _finding_sort_key(finding: FindingView) -> tuple[object, ...]:
         finding.document_line,
         finding.claim_text,
     )
+
+
+def _safe_repository_path(path: object) -> bool:
+    if (
+        not isinstance(path, str)
+        or not path
+        or len(path) > MAX_ANNOTATION_PATH
+        or "\\" in path
+        or "\x00" in path
+        or path.startswith("/")
+        or ":" in path
+    ):
+        return False
+    parsed = PurePosixPath(path)
+    return (
+        bool(parsed.parts)
+        and str(parsed) == path
+        and path.lower().endswith((".md", ".markdown"))
+        and not any(part in (".", "..") for part in parsed.parts)
+    )
+
+
+def _inline_identity(finding: FindingView, external_id: str) -> str:
+    claim_id = getattr(finding, "claim_id", "")
+    location = f"{finding.document_path}:{finding.document_line}"
+    digest = hashlib.sha256(f"{external_id}:{claim_id}:{location}".encode()).hexdigest()
+    return digest[:32]
+
+
+def _inline_body(finding: FindingView, external_id: str) -> str:
+    marker = INLINE_COMMENT_MARKER.format(identity=_inline_identity(finding, external_id))
+    sources = [
+        f"- `{item['path']}:{item['line']}`: {item['snippet'][:1000]}"
+        for item in finding.evidence
+        if isinstance(item, Mapping)
+        and isinstance(item.get("path"), str)
+        and isinstance(item.get("line"), int)
+        and not isinstance(item.get("line"), bool)
+        and item["line"] > 0
+        and isinstance(item.get("snippet"), str)
+        and bool(item["snippet"].strip())
+    ]
+    parts = [
+        "**DocDrift found a deterministic documentation mismatch.**",
+        f"Claim in `{finding.document_path}:{finding.document_line}`: {finding.claim_text}",
+        finding.explanation,
+        "Source evidence:\n" + "\n".join(sources),
+    ]
+    content = "\n\n".join(_escape_markdown(part) for part in parts)
+    suffix = "\n\n" + marker
+    if len(content) + len(suffix) > MAX_ANNOTATION_MESSAGE:
+        content = content[: MAX_ANNOTATION_MESSAGE - len(suffix) - 1] + "…"
+    return content + suffix
+
+
+def _eligible_inline_findings(
+    findings: Sequence[FindingView], *, inline_min_severity: str, max_inline_comments: int
+) -> list[FindingView]:
+    if (
+        inline_min_severity not in SEVERITY_ORDER
+        or isinstance(max_inline_comments, bool)
+        or not isinstance(max_inline_comments, int)
+        or not 0 <= max_inline_comments <= 50
+    ):
+        return []
+    threshold = SEVERITY_ORDER[inline_min_severity]
+    eligible = [
+        finding
+        for finding in findings
+        if not getattr(finding, "ignored", False)
+        and finding.verdict == "false"
+        and getattr(finding, "deterministic", True)
+        and _confidence_rank(finding) > 0
+        and classify_severity(finding) is not None
+        and SEVERITY_ORDER[classify_severity(finding) or "unclassified"] <= threshold
+        and _safe_repository_path(finding.document_path)
+        and isinstance(getattr(finding, "claim_id", None), str)
+        and bool(getattr(finding, "claim_id", ""))
+        and isinstance(getattr(finding, "inline_comment_line", None), int)
+        and not isinstance(getattr(finding, "inline_comment_line", None), bool)
+        and getattr(finding, "inline_comment_line", None) == finding.document_line
+        and isinstance(finding.document_line, int)
+        and not isinstance(finding.document_line, bool)
+        and 1 <= finding.document_line <= 2_147_483_647
+    ]
+    return sorted(eligible, key=_finding_sort_key)[:max_inline_comments]
 
 
 def build_pr_summary(findings: Sequence[FindingView]) -> str:
@@ -730,6 +820,217 @@ class GitHubAppCheckRunPublisher:
             extra={"repository": repository, "pull_request_number": pull_request_number},
         )
         return comment_id
+
+    async def publish_inline_comments(
+        self,
+        *,
+        repository: str,
+        repository_id: int,
+        installation_id: int,
+        pull_request_number: int,
+        base_sha: str | None,
+        head_sha: str,
+        external_id: str,
+        findings: Sequence[FindingView],
+        inline_min_severity: str,
+        max_inline_comments: int,
+    ) -> int:
+        """Publish bounded plain review comments at previously verified diff lines."""
+        eligible = _eligible_inline_findings(
+            findings,
+            inline_min_severity=inline_min_severity,
+            max_inline_comments=max_inline_comments,
+        )
+        if not eligible:
+            return 0
+        if (
+            not isinstance(base_sha, str)
+            or not re.fullmatch(r"[0-9a-fA-F]{40}", base_sha)
+            or not re.fullmatch(r"[0-9a-fA-F]{40}", head_sha)
+        ):
+            logger.info("github_inline_comments_skipped", extra={"reason": "missing_revision"})
+            return 0
+        try:
+            owner, name = _validate_repository(repository)
+        except ValueError as error:
+            raise GitHubPublicationError(str(error)) from error
+        if (
+            isinstance(pull_request_number, bool)
+            or not isinstance(pull_request_number, int)
+            or pull_request_number < 1
+        ):
+            raise GitHubPublicationError("Persisted pull request number is invalid.")
+
+        repository_path = f"/repos/{owner}/{name}"
+        pull_path = f"{repository_path}/pulls/{pull_request_number}"
+        comments_path = f"{pull_path}/comments"
+        headers = {
+            "Accept": "application/vnd.github+json",
+            "X-GitHub-Api-Version": "2026-03-10",
+            "User-Agent": "DocDrift",
+        }
+        async with self.client_factory(
+            base_url=GITHUB_API,
+            timeout=httpx.Timeout(15.0),
+            follow_redirects=False,
+            headers=headers,
+        ) as client:
+            token = await self._installation_token(
+                client,
+                installation_id,
+                repository_id,
+                permissions={"pull_requests": "write"},
+            )
+            client.headers.update({**headers, "Authorization": f"Bearer {token}"})
+            existing = await self._find_inline_comments(client, comments_path)
+            published = 0
+            for finding in eligible:
+                if not await self._pull_revision_matches(
+                    client, pull_path, base_sha=base_sha, head_sha=head_sha
+                ):
+                    logger.info(
+                        "github_inline_comments_skipped",
+                        extra={"repository": repository, "reason": "stale_pull_request_revision"},
+                    )
+                    break
+                marker = INLINE_COMMENT_MARKER.format(
+                    identity=_inline_identity(finding, external_id)
+                )
+                comment_body = _inline_body(finding, external_id)
+                comment_id = existing.get(marker)
+                if comment_id is None:
+                    response = await client.post(
+                        comments_path,
+                        json={
+                            "body": comment_body,
+                            "commit_id": head_sha,
+                            "path": finding.document_path,
+                            "line": finding.document_line,
+                            "side": "RIGHT",
+                        },
+                    )
+                    expected_status = 201
+                    operation = "inline review comment creation"
+                else:
+                    response = await client.patch(
+                        f"{repository_path}/pulls/comments/{comment_id}",
+                        json={"body": comment_body},
+                    )
+                    expected_status = 200
+                    operation = "inline review comment update"
+                if response.status_code == 422:
+                    # The finding remains in the Check Run and summary; a rejected anchor
+                    # is deliberately not retried as an unanchored comment.
+                    logger.info(
+                        "github_inline_comment_rejected",
+                        extra={"repository": repository, "reason": "invalid_diff_position"},
+                    )
+                    continue
+                if response.status_code != expected_status:
+                    raise _api_error(response, operation)
+                if comment_id is None:
+                    try:
+                        created_id = response.json().get("id")
+                    except (ValueError, AttributeError) as error:
+                        raise GitHubPublicationError(
+                            "GitHub returned an invalid inline comment response."
+                        ) from error
+                    if (
+                        isinstance(created_id, bool)
+                        or not isinstance(created_id, int)
+                        or created_id < 1
+                    ):
+                        raise GitHubPublicationError(
+                            "GitHub returned an invalid inline comment ID."
+                        )
+                    existing[marker] = created_id
+                published += 1
+        logger.info(
+            "github_inline_comments_published",
+            extra={"repository": repository, "count": published},
+        )
+        return published
+
+    async def _pull_revision_matches(
+        self,
+        client: httpx.AsyncClient,
+        pull_path: str,
+        *,
+        base_sha: str,
+        head_sha: str,
+    ) -> bool:
+        """Confirm one comment still targets the open, analyzed PR revisions."""
+        response = await client.get(pull_path)
+        if response.status_code == 404:
+            return False
+        if response.status_code != 200:
+            raise _api_error(response, "pull request head validation")
+        try:
+            pull = response.json()
+            current_head = pull["head"]["sha"]
+            current_base = pull["base"]["sha"]
+            state = pull["state"]
+        except (ValueError, KeyError, TypeError) as error:
+            raise GitHubPublicationError(
+                "GitHub returned an invalid pull request revision response."
+            ) from error
+        return (
+            state == "open"
+            and isinstance(current_head, str)
+            and current_head.lower() == head_sha.lower()
+            and isinstance(current_base, str)
+            and current_base.lower() == base_sha.lower()
+        )
+
+    async def _find_inline_comments(
+        self, client: httpx.AsyncClient, comments_path: str
+    ) -> dict[str, int]:
+        """Index only comments carrying our stable marker from a GitHub App bot."""
+        url = f"{GITHUB_API}{comments_path}"
+        params: dict[str, int] = {"per_page": 100}
+        found: dict[str, int] = {}
+        for _ in range(10):
+            response = await client.get(url, params=params)
+            if response.status_code != 200:
+                raise _api_error(response, "inline review comment lookup")
+            try:
+                comments = response.json()
+            except ValueError as error:
+                raise GitHubPublicationError(
+                    "GitHub returned an invalid review comment list."
+                ) from error
+            if not isinstance(comments, list):
+                raise GitHubPublicationError("GitHub returned an invalid review comment list.")
+            for item in comments:
+                if not isinstance(item, Mapping):
+                    continue
+                user = item.get("user")
+                body = item.get("body")
+                comment_id = item.get("id")
+                if (
+                    isinstance(user, Mapping)
+                    and user.get("type") == "Bot"
+                    and isinstance(user.get("login"), str)
+                    and user["login"].endswith("[bot]")
+                    and isinstance(body, str)
+                    and isinstance(comment_id, int)
+                    and not isinstance(comment_id, bool)
+                    and comment_id > 0
+                ):
+                    marker_match = re.search(
+                        r"<!-- docdrift-inline:v1:([0-9a-f]{32}) -->", body
+                    )
+                    if marker_match:
+                        found[f"<!-- docdrift-inline:v1:{marker_match.group(1)} -->"] = comment_id
+            next_link = response.links.get("next", {}).get("url")
+            if not next_link:
+                return found
+            parsed = urlsplit(next_link)
+            if parsed.scheme != "https" or parsed.netloc != "api.github.com":
+                raise GitHubPublicationError("GitHub returned an unsafe pagination URL.")
+            url = next_link
+            params = {}
+        return found
 
     async def _find_summary_comment(
         self, client: httpx.AsyncClient, comments_path: str
