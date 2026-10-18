@@ -6,6 +6,23 @@ The pipeline discovers Markdown within explicit scopes, extracts supported claim
 
 The exact-name inverted index maps claim subjects to claim IDs for future changed-symbol selection. The initial command performs full scans. Future adapters can consume the core models without depending on CLI presentation.
 
+## Grounded verification contract
+
+`docdrift_core.verification` defines provider-neutral input snippets, structured
+`true`/`false`/`abstain` results, and exact citation validation. Each evidence snippet
+keeps a normalized repository-relative POSIX path and one-based starting line; its opaque
+reference is a stable hash of that location and exact text. A result must be a decoded
+object with the exact `verdict`, `evidence_refs`, and `rationale` fields. Each citation
+contains only a supplied reference and a verbatim quote; model-provided file paths and line
+numbers are not accepted.
+
+Citation matching establishes that quoted text came from the current evidence set, but it
+does not establish that the text entails the claim. For that reason a `true` or `false`
+result is accepted only when a trusted deterministic evidence-sufficiency gate is supplied
+and approves the cited snippets. Missing, failing, or negative gates and all malformed or
+unmatched output become `abstain`. This contract is not connected to the analysis worker,
+persisted findings, or GitHub publication; current PR behavior remains deterministic.
+
 Repository content is untrusted data. The engine does not execute code, use `eval`/`exec`, retrieve secrets or environment values, or make network calls. File path claims are resolved and constrained to the repository root. Route and CLI recognizers use AST shape and literal values; they do not import FastAPI, Flask, Click, or Typer. Router mounting and prefixes are not fully resolved, so uncertain route claims abstain.
 
 ## Pull request reporting
