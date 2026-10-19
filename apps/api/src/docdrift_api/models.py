@@ -231,6 +231,60 @@ class FeedbackEvent(Base):
     source: Mapped[str] = mapped_column(String(32), nullable=False)
     source_event_id: Mapped[str] = mapped_column(String(255), nullable=False)
     reason: Mapped[str | None] = mapped_column(Text, nullable=True)
+    actor_github_user_id: Mapped[int | None] = mapped_column(BigInteger, nullable=True)
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), nullable=False, server_default=func.now()
     )
+
+
+class DashboardSession(Base):
+    """Server-side GitHub OAuth session; only a hash of the browser token is stored."""
+
+    __tablename__ = "dashboard_sessions"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    token_hash: Mapped[str] = mapped_column(String(64), unique=True, nullable=False, index=True)
+    github_user_id: Mapped[int] = mapped_column(BigInteger, nullable=False, index=True)
+    github_login: Mapped[str] = mapped_column(String(255), nullable=False)
+    encrypted_access_token: Mapped[str] = mapped_column(Text, nullable=False)
+    csrf_token_hash: Mapped[str] = mapped_column(String(64), nullable=False)
+    expires_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False, index=True)
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), nullable=False, server_default=func.now()
+    )
+
+
+class PublishedSuggestion(Base):
+    """Identity and publication state for one exact, verified suggested change."""
+
+    __tablename__ = "published_suggestions"
+    __table_args__ = (
+        ForeignKeyConstraint(
+            ["finding_id", "run_id"],
+            ["analysis_findings.id", "analysis_findings.run_id"],
+            name="fk_suggestion_finding_run",
+            ondelete="CASCADE",
+        ),
+        ForeignKeyConstraint(
+            ["run_id", "repository_id"],
+            ["runs.id", "runs.repository_id"],
+            name="fk_suggestion_run_repository",
+            ondelete="CASCADE",
+        ),
+        UniqueConstraint("run_id", "finding_id", "change_fingerprint", name="uq_suggestion_identity"),
+    )
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    finding_id: Mapped[int] = mapped_column(Integer, nullable=False, index=True)
+    run_id: Mapped[int] = mapped_column(Integer, nullable=False, index=True)
+    repository_id: Mapped[int] = mapped_column(Integer, nullable=False, index=True)
+    head_sha: Mapped[str] = mapped_column(String(128), nullable=False)
+    document_path: Mapped[str] = mapped_column(String(1024), nullable=False)
+    document_line: Mapped[int] = mapped_column(Integer, nullable=False)
+    change_fingerprint: Mapped[str] = mapped_column(String(64), nullable=False)
+    publication_status: Mapped[str] = mapped_column(String(32), nullable=False)
+    github_comment_id: Mapped[int | None] = mapped_column(BigInteger, nullable=True)
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), nullable=False, server_default=func.now()
+    )
+    published_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)

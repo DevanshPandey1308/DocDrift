@@ -5,11 +5,20 @@ from __future__ import annotations
 import hashlib
 import logging
 from dataclasses import dataclass
+from datetime import UTC, datetime
 
 import httpx
 from docdrift_api.config import Settings
-from docdrift_api.models import AnalysisFinding, PublicationStatus, Repository, Run, RunStatus
+from docdrift_api.models import (
+    AnalysisFinding,
+    PublicationStatus,
+    PublishedSuggestion,
+    Repository,
+    Run,
+    RunStatus,
+)
 from sqlalchemy import select, text
+from sqlalchemy.dialects.postgresql import insert
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 from sqlalchemy.orm import selectinload
 
@@ -159,6 +168,88 @@ async def _publish_latest_summary(
         return "published"
 
 
+async def _record_published_suggestion(
+    session_factory: async_sessionmaker[AsyncSession],
+    prepared: PublicationInput,
+    suggestion: VerifiedFixSuggestion,
+    github_comment_id: int,
+) -> None:
+    """Persist only after GitHub confirms the exact planner-approved suggestion comment."""
+    patch = suggestion.decision.patch
+    if (
+        patch is None
+        or suggestion.decision.patch_delivery_eligible is not True
+        or suggestion.decision.head_sha != prepared.head_sha.lower()
+        or suggestion.decision.document_path != suggestion.finding.claim.document_path
+        or suggestion.decision.document_line != suggestion.finding.claim.line
+        or isinstance(github_comment_id, bool)
+        or not isinstance(github_comment_id, int)
+        or github_comment_id < 1
+    ):
+        raise GitHubPublicationError("Verified suggestion identity failed persistence validation.")
+    fingerprint = hashlib.sha256(
+        "\0".join(
+            (
+                prepared.head_sha.lower(),
+                suggestion.finding.claim.document_path,
+                str(suggestion.finding.claim.line),
+                str(patch.start_offset),
+                str(patch.end_offset),
+                patch.expected_original,
+                patch.replacement_text,
+            )
+        ).encode("utf-8")
+    ).hexdigest()
+    async with session_factory() as session, session.begin():
+        run = await session.scalar(
+            select(Run).where(Run.id == prepared.run_id).with_for_update()
+        )
+        finding = await session.scalar(
+            select(AnalysisFinding).where(
+                AnalysisFinding.run_id == prepared.run_id,
+                AnalysisFinding.claim_id == suggestion.claim_id,
+            )
+        )
+        newer_run = await session.scalar(
+            select(Run.id).where(
+                Run.repository_id == prepared.repository_id,
+                Run.pull_request_number == prepared.pull_request_number,
+                Run.id > prepared.run_id,
+            ).limit(1)
+        )
+        if (
+            run is None
+            or finding is None
+            or newer_run is not None
+            or run.repository_id is None
+            or run.head_sha.lower() != prepared.head_sha.lower()
+            or run.status != RunStatus.COMPLETED
+        ):
+            raise GitHubPublicationError("Suggestion no longer matches the persisted PR run.")
+        statement = insert(PublishedSuggestion).values(
+            finding_id=finding.id,
+            run_id=run.id,
+            repository_id=run.repository_id,
+            head_sha=run.head_sha,
+            document_path=suggestion.decision.document_path,
+            document_line=suggestion.decision.document_line,
+            change_fingerprint=fingerprint,
+            publication_status="published",
+            github_comment_id=github_comment_id,
+            published_at=datetime.now(UTC),
+        )
+        await session.execute(
+            statement.on_conflict_do_update(
+                constraint="uq_suggestion_identity",
+                set_={
+                    "publication_status": "published",
+                    "github_comment_id": github_comment_id,
+                    "published_at": datetime.now(UTC),
+                },
+            )
+        )
+
+
 async def publish_completed_run(
     session_factory: async_sessionmaker[AsyncSession],
     run_id: int,
@@ -222,6 +313,27 @@ async def publish_completed_run(
             }
             if verified_fix_suggestions:
                 inline_arguments["verified_fix_suggestions"] = verified_fix_suggestions
+
+                suggestions_by_claim = {
+                    item.claim_id: item for item in verified_fix_suggestions
+                }
+
+                async def persist_suggestion(finding: object, comment_id: int) -> None:
+                    claim_id = getattr(finding, "claim_id", None)
+                    if not isinstance(claim_id, str):
+                        raise GitHubPublicationError(
+                            "GitHub suggestion comment has no valid finding identity."
+                        )
+                    candidate = suggestions_by_claim.get(claim_id)
+                    if candidate is None:
+                        raise GitHubPublicationError(
+                            "GitHub returned a suggestion comment without a matching candidate."
+                        )
+                    await _record_published_suggestion(
+                        session_factory, prepared, candidate, comment_id
+                    )
+
+                inline_arguments["on_suggestion_published"] = persist_suggestion
             await publish_inline(**inline_arguments)
     except GitHubPublicationError:
         await _set_publication_status(session_factory, run_id, PublicationStatus.FAILED)

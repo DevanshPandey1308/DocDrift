@@ -1,7 +1,6 @@
 """Persistence and reporting primitives for explicit maintainer feedback.
 
-These functions are internal building blocks. They are not exposed as HTTP routes until
-dashboard authentication and per-finding suggestion publication records exist.
+These functions back the authenticated dashboard routes and can also be tested in isolation.
 """
 
 from __future__ import annotations
@@ -18,6 +17,10 @@ from .models import AnalysisFinding, FeedbackCategory, FeedbackEvent, Run
 
 class FeedbackTargetNotFound(LookupError):
     """The finding, run, and repository tuple does not identify one existing target."""
+
+
+class FeedbackIdempotencyConflict(ValueError):
+    """An idempotency key was reused for a different feedback event."""
 
 
 @dataclass(frozen=True)
@@ -59,6 +62,7 @@ async def record_feedback(
     source: str,
     source_event_id: str,
     reason: str | None = None,
+    actor_github_user_id: int | None = None,
 ) -> FeedbackEvent:
     """Store an explicit feedback event idempotently after validating its full ownership tuple."""
     try:
@@ -102,6 +106,7 @@ async def record_feedback(
                 source=source,
                 source_event_id=source_event_id,
                 reason=reason,
+                actor_github_user_id=actor_github_user_id,
             )
             .on_conflict_do_nothing(constraint="uq_feedback_source_event")
             .returning(FeedbackEvent.id)
@@ -115,6 +120,15 @@ async def record_feedback(
             )
             if existing is None:
                 raise RuntimeError("Feedback idempotency conflict did not resolve to an existing event.")
+            if (
+                existing.finding_id != finding_id
+                or existing.run_id != run_id
+                or existing.repository_id != repository_id
+                or existing.category != category
+                or existing.reason != reason
+                or existing.actor_github_user_id != actor_github_user_id
+            ):
+                raise FeedbackIdempotencyConflict("Idempotency key belongs to another feedback event.")
             return existing
         event = await session.get(FeedbackEvent, inserted_id)
         if event is None:

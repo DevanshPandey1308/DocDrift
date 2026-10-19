@@ -28,6 +28,11 @@ class Settings:
     anthropic_fix_model: str = ""
     llm_timeout_seconds: float = 20.0
     llm_run_token_budget: int = 20_000
+    github_oauth_client_id: str | None = None
+    github_oauth_client_secret: str | None = field(default=None, repr=False)
+    dashboard_session_encryption_key: str | None = field(default=None, repr=False)
+    dashboard_oauth_redirect_uri: str = "http://localhost:8000/auth/github/callback"
+    dashboard_cookie_secure: bool = True
 
     def __post_init__(self) -> None:
         if (
@@ -83,4 +88,12 @@ class Settings:
             anthropic_fix_model=os.getenv("DOCDRIFT_ANTHROPIC_FIX_MODEL", "").strip(),
             llm_timeout_seconds=timeout,
             llm_run_token_budget=token_budget,
+            github_oauth_client_id=(os.getenv("DOCDRIFT_GITHUB_OAUTH_CLIENT_ID") or "").strip() or None,
+            github_oauth_client_secret=(os.getenv("DOCDRIFT_GITHUB_OAUTH_CLIENT_SECRET") or "").strip() or None,
+            dashboard_session_encryption_key=(os.getenv("DOCDRIFT_SESSION_ENCRYPTION_KEY") or "").strip() or None,
+            dashboard_oauth_redirect_uri=(
+                os.getenv("DOCDRIFT_GITHUB_OAUTH_REDIRECT_URI", "http://localhost:8000/auth/github/callback").strip()
+            ),
+            dashboard_cookie_secure=os.getenv("DOCDRIFT_DASHBOARD_COOKIE_SECURE", "true").strip().lower()
+            not in {"0", "false", "no"},
         )

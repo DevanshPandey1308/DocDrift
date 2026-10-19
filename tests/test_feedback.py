@@ -5,6 +5,7 @@ from typing import Self
 from unittest.mock import AsyncMock
 
 from docdrift_api.config import Settings
+from docdrift_api.dashboard import _state, _valid_state
 from docdrift_api.feedback import (
     FeedbackTargetNotFound,
     calculate_acceptance_metrics,
@@ -13,6 +14,7 @@ from docdrift_api.feedback import (
 )
 from docdrift_api.main import create_app
 from docdrift_api.models import FeedbackCategory, FeedbackEvent
+from fastapi.testclient import TestClient
 
 
 class _Context:
@@ -61,9 +63,28 @@ class FeedbackMetricsTests(unittest.TestCase):
         self.assertEqual(metrics.rejected_fixes, 0)
         self.assertIsNone(metrics.acceptance_rate)
 
-    def test_no_unauthenticated_feedback_routes_are_exposed(self) -> None:
+    def test_dashboard_routes_exist_and_require_auth_dependencies(self) -> None:
         paths = create_app(Settings()).openapi()["paths"]
-        self.assertFalse(any("feedback" in path or "metrics" in path for path in paths))
+        self.assertIn("/auth/github/login", paths)
+        self.assertIn("/suggestions/{suggestion_id}/feedback", paths)
+        self.assertIn("/findings/{finding_id}/feedback", paths)
+        self.assertIn("/runs/{run_id}/feedback", paths)
+        self.assertIn("/repositories/{repository_id}/feedback/metrics", paths)
+
+    def test_oauth_state_signature_and_age_are_validated(self) -> None:
+        settings = Settings(dashboard_session_encryption_key="bXlfc2VjcmV0X2tleQ==")
+        value = _state(settings, "nonce", 1000)
+        self.assertTrue(_valid_state(settings, value, now=1100))
+        self.assertFalse(_valid_state(settings, value + "x", now=1100))
+        self.assertFalse(_valid_state(settings, value, now=1700))
+
+    def test_auth_configuration_fails_closed_and_private_routes_reject_anonymous(self) -> None:
+        app = create_app(Settings())
+        with TestClient(app) as client:
+            self.assertEqual(client.get("/auth/github/login").status_code, 503)
+            self.assertEqual(
+                client.get("/repositories/1/feedback/metrics").status_code, 401
+            )
 
 
 class FeedbackPersistenceTests(unittest.IsolatedAsyncioTestCase):

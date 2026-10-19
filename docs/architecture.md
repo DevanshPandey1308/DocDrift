@@ -107,19 +107,33 @@ Migration `0008_feedback_events` adds an append-only feedback ledger for explici
 run, and repository IDs; composite foreign keys ensure those records describe one consistent
 ownership chain. A unique `(source, source_event_id)` key makes a repeated logical submission
 idempotent. A later choice is recorded as a new event rather than overwriting history.
-`docdrift_api.feedback` contains persistence, retrieval, and metrics primitives for use by a
-future authenticated API. Its acceptance rate is accepted fixes divided by accepted plus
+`docdrift_api.feedback` contains persistence, retrieval, and metrics primitives used by the
+authenticated API. Its acceptance rate is accepted fixes divided by accepted plus
 rejected fixes. False-positive reports and unknown categories are excluded; if there are no
 accepted or rejected fix outcomes, the rate is `null` (unknown), not zero.
 
-There are currently no HTTP feedback or metrics routes. The API has no dashboard-user
-authentication or repository-level user authorization, so exposing private run/finding data
-would be unsafe. The worker also does not persist a per-finding GitHub suggestion/comment
-publication record. Signed GitHub PR, issue-comment, and review-comment events therefore do
-not yet prove that a specific DocDrift fix was accepted or rejected. Feedback must not be
-inferred from a PR merge or closure. Before dashboard use, add authenticated user sessions
-and repository authorization, persist the exact published suggestion identity, then expose
-validated feedback submission/retrieval/aggregate routes. Until then, the new persistence
-functions are internal building blocks only; no user identity or outcome is synthesized.
+Migration `0009_dashboard_auth_suggestions` adds server-side GitHub OAuth sessions and
+published-suggestion identities. OAuth state is time-limited and HMAC-protected; the session
+cookie contains a random opaque token whose hash is stored in PostgreSQL. The GitHub OAuth
+access token is encrypted at rest using `DOCDRIFT_SESSION_ENCRYPTION_KEY`. Mutating routes
+require a double-submit CSRF token checked against the stored session hash. Every private
+repository request checks the OAuth token against GitHub's repository endpoint and matches
+the trusted GitHub repository ID to a repository with an active DocDrift installation. Missing
+OAuth settings fail closed. Configure the client ID, secret, encryption key, and exact callback
+URI; production uses HTTPS and secure cookies. GitHub access checks require network access and
+were not live-tested in the unit suite.
+
+The worker writes a published-suggestion row only after GitHub returns a successful inline
+comment response for a planner-approved suggestion. The record includes the finding/run/repo,
+analyzed head, path/line, SHA-256 patch fingerprint, and comment ID. Retries update the same
+identity. Candidate proposals and failed/stale publication attempts do not create accepted
+feedback records. The dashboard routes are `POST /suggestions/{id}/feedback` for accepted or
+rejected outcomes, `POST /findings/{id}/feedback` for false-positive reports, `GET
+/runs/{id}/feedback`, `GET /findings/{id}/feedback`, and
+`GET /repositories/{id}/feedback/metrics`. The metrics response gives numerator, denominator,
+and `acceptance_rate = accepted / (accepted + rejected)`; false positives and unknown outcomes
+are excluded, and zero outcomes return `null`. Feedback is append-only and idempotent by
+authenticated actor plus caller idempotency key. GitHub merge/close and review-comment events
+are not treated as proof of per-suggestion acceptance.
 
 `<!-- docdrift-ignore -->` is a standalone, single-line exclusion marker. It applies only to claims extracted from the next physical Markdown line in the same file. It cannot cross blank lines or affect another document. The marker is recorded as the persisted ignore reason; ordinary HTML comments are unchanged. Repository-level claim-ID and document exclusions take precedence over marker reasons.

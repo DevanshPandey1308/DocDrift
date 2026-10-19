@@ -21,6 +21,8 @@ class PersistenceSchemaTests(unittest.TestCase):
                 "webhook_deliveries",
                 "analysis_findings",
                 "feedback_events",
+                "dashboard_sessions",
+                "published_suggestions",
             },
         )
         installations = Base.metadata.tables["installations"]
@@ -29,6 +31,7 @@ class PersistenceSchemaTests(unittest.TestCase):
         deliveries = Base.metadata.tables["webhook_deliveries"]
         findings = Base.metadata.tables["analysis_findings"]
         feedback = Base.metadata.tables["feedback_events"]
+        suggestions = Base.metadata.tables["published_suggestions"]
 
         self.assertIn("uq_installations_github_installation_id", {
             item.name for item in installations.constraints
@@ -47,6 +50,10 @@ class PersistenceSchemaTests(unittest.TestCase):
         self.assertIn("uq_feedback_source_event", {item.name for item in feedback.constraints})
         self.assertIn("fk_feedback_finding_run", {item.name for item in feedback.constraints})
         self.assertIn("fk_feedback_run_repository", {item.name for item in feedback.constraints})
+        self.assertIn("uq_suggestion_identity", {item.name for item in suggestions.constraints})
+        self.assertIn("fk_suggestion_finding_run", {item.name for item in suggestions.constraints})
+        self.assertIn("fk_suggestion_run_repository", {item.name for item in suggestions.constraints})
+        self.assertEqual(feedback.c.actor_github_user_id.nullable, True)
         self.assertEqual(findings.c.evidence.nullable, False)
         self.assertEqual(findings.c.verdict.nullable, False)
         self.assertEqual(runs.c.publication_status.nullable, False)
@@ -79,7 +86,7 @@ class PersistenceSchemaTests(unittest.TestCase):
         script = ScriptDirectory.from_config(config)
         revision = script.get_current_head()
 
-        self.assertEqual(revision, "0008_feedback_events")
+        self.assertEqual(revision, "0009_dashboard_auth_suggestions")
         self.assertIn(RunStatus.AWAITING_ANALYSIS, tuple(RunStatus))
         self.assertTrue((ROOT / "apps/api/migrations/env.py").is_file())
         self.assertEqual(AnalysisFinding.__tablename__, "analysis_findings")

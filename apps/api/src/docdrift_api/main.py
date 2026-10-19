@@ -5,12 +5,13 @@ from __future__ import annotations
 from collections.abc import AsyncIterator
 from contextlib import asynccontextmanager
 
-from fastapi import FastAPI
 from arq.connections import ArqRedis
+from fastapi import FastAPI
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 from sqlalchemy.ext.asyncio.engine import AsyncEngine
 
 from .config import Settings
+from .dashboard import create_dashboard_router
 from .database import create_session_factory, dispose_engine
 from .queue import close_queue_pool, create_queue_pool
 from .routes import create_health_router
@@ -48,10 +49,12 @@ def create_app(
                 await dispose_engine(engine)
 
     application = FastAPI(title=app_settings.title, version=app_settings.version, lifespan=lifespan)
+    application.state.settings = app_settings
     application.state.session_factory = session_factory
     application.state.redis_pool = redis_pool
     application.include_router(create_health_router(app_settings))
     application.include_router(create_webhook_router(app_settings))
+    application.include_router(create_dashboard_router(app_settings))
     return application
 
 

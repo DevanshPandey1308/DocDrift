@@ -7,7 +7,7 @@ import logging
 import re
 import time
 from collections import Counter
-from collections.abc import Mapping, Sequence
+from collections.abc import Awaitable, Callable, Mapping, Sequence
 from dataclasses import dataclass
 from html import escape as escape_html
 from pathlib import PurePosixPath
@@ -907,6 +907,7 @@ class GitHubAppCheckRunPublisher:
         inline_min_severity: str,
         max_inline_comments: int,
         verified_fix_suggestions: Sequence[object] = (),
+        on_suggestion_published: Callable[[FindingView, int], Awaitable[None]] | None = None,
     ) -> int:
         """Publish bounded review comments, using suggestions only for planner-approved fixes."""
         eligible = _eligible_inline_findings(
@@ -1024,6 +1025,9 @@ class GitHubAppCheckRunPublisher:
                             "GitHub returned an invalid inline comment ID."
                         )
                     existing[marker] = created_id
+                    comment_id = created_id
+                if finding.claim_id in suggestions and on_suggestion_published is not None:
+                    await on_suggestion_published(finding, comment_id)
                 published += 1
         logger.info(
             "github_inline_comments_published",
