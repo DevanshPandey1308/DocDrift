@@ -5,7 +5,7 @@ from pathlib import Path
 
 from alembic.config import Config
 from alembic.script import ScriptDirectory
-from docdrift_api.models import AnalysisFinding, Base, DeliveryStatus, Run, RunStatus
+from docdrift_api.models import AnalysisFinding, Base, DeliveryStatus, FeedbackEvent, Run, RunStatus
 
 ROOT = Path(__file__).resolve().parents[1]
 
@@ -14,13 +14,21 @@ class PersistenceSchemaTests(unittest.TestCase):
     def test_initial_metadata_has_required_tables_constraints_and_foreign_keys(self) -> None:
         self.assertEqual(
             set(Base.metadata.tables),
-            {"installations", "repositories", "runs", "webhook_deliveries", "analysis_findings"},
+            {
+                "installations",
+                "repositories",
+                "runs",
+                "webhook_deliveries",
+                "analysis_findings",
+                "feedback_events",
+            },
         )
         installations = Base.metadata.tables["installations"]
         repositories = Base.metadata.tables["repositories"]
         runs = Base.metadata.tables["runs"]
         deliveries = Base.metadata.tables["webhook_deliveries"]
         findings = Base.metadata.tables["analysis_findings"]
+        feedback = Base.metadata.tables["feedback_events"]
 
         self.assertIn("uq_installations_github_installation_id", {
             item.name for item in installations.constraints
@@ -36,6 +44,9 @@ class PersistenceSchemaTests(unittest.TestCase):
         self.assertIn("uq_analysis_findings_run_claim", {
             item.name for item in findings.constraints
         })
+        self.assertIn("uq_feedback_source_event", {item.name for item in feedback.constraints})
+        self.assertIn("fk_feedback_finding_run", {item.name for item in feedback.constraints})
+        self.assertIn("fk_feedback_run_repository", {item.name for item in feedback.constraints})
         self.assertEqual(findings.c.evidence.nullable, False)
         self.assertEqual(findings.c.verdict.nullable, False)
         self.assertEqual(runs.c.publication_status.nullable, False)
@@ -68,10 +79,11 @@ class PersistenceSchemaTests(unittest.TestCase):
         script = ScriptDirectory.from_config(config)
         revision = script.get_current_head()
 
-        self.assertEqual(revision, "0006_inline_review_locations")
+        self.assertEqual(revision, "0008_feedback_events")
         self.assertIn(RunStatus.AWAITING_ANALYSIS, tuple(RunStatus))
         self.assertTrue((ROOT / "apps/api/migrations/env.py").is_file())
         self.assertEqual(AnalysisFinding.__tablename__, "analysis_findings")
+        self.assertEqual(FeedbackEvent.__tablename__, "feedback_events")
 
 
 if __name__ == "__main__":

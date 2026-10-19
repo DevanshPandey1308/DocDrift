@@ -100,4 +100,26 @@ The worker stores a review-comment line only when the claim's exact Markdown lin
 
 `docdrift_worker.fix_delivery.plan_verified_fix_delivery` is a pure planning boundary. It requires the complete successful edited-region verification result, a patch that exactly matches that result, a valid changed-line map, and matching analyzed/current PR head SHAs. A safe target line in the PR diff selects `inline_suggestion`; all other cases retain the existing finding as the annotation/summary fallback. The worker passes planner-approved suggestions to the publisher in memory during the same job invocation. The publisher substitutes a GitHub suggestion block into that finding's existing budgeted inline comment only when the plan, finding, location, and head still match and the live PR revision check succeeds. Existing severity thresholds, comment budgets, ignore rules, run idempotency, and stale-run protections still apply. Candidate patches and verification results are not persisted, so a retry after transient proposal data is lost safely publishes the original finding without a suggestion.
 
+## Explicit feedback persistence
+
+Migration `0008_feedback_events` adds an append-only feedback ledger for explicit
+`fix_accepted`, `fix_rejected`, and `false_positive` events. Each record carries the finding,
+run, and repository IDs; composite foreign keys ensure those records describe one consistent
+ownership chain. A unique `(source, source_event_id)` key makes a repeated logical submission
+idempotent. A later choice is recorded as a new event rather than overwriting history.
+`docdrift_api.feedback` contains persistence, retrieval, and metrics primitives for use by a
+future authenticated API. Its acceptance rate is accepted fixes divided by accepted plus
+rejected fixes. False-positive reports and unknown categories are excluded; if there are no
+accepted or rejected fix outcomes, the rate is `null` (unknown), not zero.
+
+There are currently no HTTP feedback or metrics routes. The API has no dashboard-user
+authentication or repository-level user authorization, so exposing private run/finding data
+would be unsafe. The worker also does not persist a per-finding GitHub suggestion/comment
+publication record. Signed GitHub PR, issue-comment, and review-comment events therefore do
+not yet prove that a specific DocDrift fix was accepted or rejected. Feedback must not be
+inferred from a PR merge or closure. Before dashboard use, add authenticated user sessions
+and repository authorization, persist the exact published suggestion identity, then expose
+validated feedback submission/retrieval/aggregate routes. Until then, the new persistence
+functions are internal building blocks only; no user identity or outcome is synthesized.
+
 `<!-- docdrift-ignore -->` is a standalone, single-line exclusion marker. It applies only to claims extracted from the next physical Markdown line in the same file. It cannot cross blank lines or affect another document. The marker is recorded as the persisted ignore reason; ordinary HTML comments are unchanged. Repository-level claim-ID and document exclusions take precedence over marker reasons.

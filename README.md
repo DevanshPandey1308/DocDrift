@@ -201,3 +201,17 @@ The dependency direction is CLI adapter → core. The core has no CLI, web, GitH
 Current limitations include a limited Markdown grammar, top-level/module-name ambiguity for same-named functions, literal-only static resolution, `argparse`-focused CLI recognition, and no general Python version range parser. Impact selection currently uses exact static names and narrows only addition-only Python diffs; other changes use a full scan. The `.docdrift.yml` support is intentionally limited to document path exclusions and exact claim-ID ignores. Click and Typer declarations, overloaded/dynamic semantics, and arbitrary prose are not supported. LLM verification remains subject to bounded indexed evidence and strict citation/sufficiency checks. Fix suggestions are only possible when every claim in the edited region verifies true and the existing in-diff publisher guards pass. No benchmark performance claim has been made.
 
 Future milestones may add broader checker coverage, changed-symbol selection using Git diffs, a reproducible benchmark, and hosted adapters. They are not implemented in this phase.
+
+### Feedback capture status
+
+Migration `0008_feedback_events` stores explicit `fix_accepted`, `fix_rejected`, and
+`false_positive` events with finding/run/repository integrity constraints and idempotency
+keys. Apply it to a dedicated DocDrift database with
+`.\.venv\Scripts\alembic.exe -c .\apps\api\alembic.ini upgrade head`. Internal persistence
+and retrieval primitives are in `docdrift_api.feedback`; there are no feedback HTTP routes
+yet because the API has no dashboard-user authentication or private-repository authorization.
+GitHub events also do not currently identify an exact persisted suggestion outcome. Acceptance
+rate is accepted fixes / (accepted + rejected fixes); false-positive and unknown outcomes are
+excluded, and a run with no such outcomes has an unknown (`null`) rate. See
+[`docs/architecture.md`](docs/architecture.md#explicit-feedback-persistence) for the trust
+boundaries and dashboard prerequisites.

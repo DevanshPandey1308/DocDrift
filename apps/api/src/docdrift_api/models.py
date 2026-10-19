@@ -12,6 +12,7 @@ from sqlalchemy import (
     DateTime,
     Enum,
     ForeignKey,
+    ForeignKeyConstraint,
     Integer,
     String,
     Text,
@@ -44,6 +45,14 @@ class PublicationStatus(StrEnum):
     PUBLISHED = "published"
     FAILED = "failed"
     SKIPPED = "skipped"
+
+
+class FeedbackCategory(StrEnum):
+    """Explicit maintainer feedback categories; these are never inferred from PR state."""
+
+    FIX_ACCEPTED = "fix_accepted"
+    FIX_REJECTED = "fix_rejected"
+    FALSE_POSITIVE = "false_positive"
 
 
 class TimestampMixin:
@@ -90,6 +99,7 @@ class Run(TimestampMixin, Base):
         UniqueConstraint(
             "repository_id", "pull_request_number", "head_sha", name="uq_runs_pr_head"
         ),
+        UniqueConstraint("id", "repository_id", name="uq_runs_id_repository"),
     )
 
     id: Mapped[int] = mapped_column(Integer, primary_key=True)
@@ -134,6 +144,7 @@ class AnalysisFinding(TimestampMixin, Base):
     __tablename__ = "analysis_findings"
     __table_args__ = (
         UniqueConstraint("run_id", "claim_id", name="uq_analysis_findings_run_claim"),
+        UniqueConstraint("id", "run_id", name="uq_analysis_findings_id_run"),
     )
 
     id: Mapped[int] = mapped_column(Integer, primary_key=True)
@@ -182,4 +193,44 @@ class WebhookDelivery(TimestampMixin, Base):
         nullable=False,
         default=DeliveryStatus.ACCEPTED,
         server_default=DeliveryStatus.ACCEPTED.value,
+    )
+
+
+class FeedbackEvent(Base):
+    """An explicitly submitted feedback event attached to one persisted finding."""
+
+    __tablename__ = "feedback_events"
+    __table_args__ = (
+        ForeignKeyConstraint(
+            ["finding_id", "run_id"],
+            ["analysis_findings.id", "analysis_findings.run_id"],
+            name="fk_feedback_finding_run",
+            ondelete="CASCADE",
+        ),
+        ForeignKeyConstraint(
+            ["run_id", "repository_id"],
+            ["runs.id", "runs.repository_id"],
+            name="fk_feedback_run_repository",
+            ondelete="CASCADE",
+        ),
+        UniqueConstraint("source", "source_event_id", name="uq_feedback_source_event"),
+    )
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    finding_id: Mapped[int] = mapped_column(Integer, nullable=False, index=True)
+    run_id: Mapped[int] = mapped_column(Integer, nullable=False, index=True)
+    repository_id: Mapped[int] = mapped_column(Integer, nullable=False, index=True)
+    category: Mapped[FeedbackCategory] = mapped_column(
+        Enum(
+            FeedbackCategory,
+            name="feedback_category",
+            values_callable=lambda enum: [item.value for item in enum],
+        ),
+        nullable=False,
+    )
+    source: Mapped[str] = mapped_column(String(32), nullable=False)
+    source_event_id: Mapped[str] = mapped_column(String(255), nullable=False)
+    reason: Mapped[str | None] = mapped_column(Text, nullable=True)
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), nullable=False, server_default=func.now()
     )
