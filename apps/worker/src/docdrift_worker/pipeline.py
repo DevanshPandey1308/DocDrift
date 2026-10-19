@@ -10,8 +10,10 @@ from dataclasses import dataclass
 from pathlib import Path
 
 from docdrift_api.models import AnalysisFinding, Run, RunStatus
+from docdrift_core.index import CodeIndex, build_index
+from docdrift_core.llm_client import GroundedLLMClient
 from docdrift_core.models import Claim, ClaimType, Evidence, Finding, Verdict
-from docdrift_core.orchestration import GroundedVerificationClient
+from docdrift_core.orchestration import GroundedVerificationClient, orchestrate_verification
 from sqlalchemy import delete, select
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 from sqlalchemy.orm import selectinload
@@ -27,6 +29,7 @@ from .fix_integration import (
     VerifiedFixSuggestion,
     prepare_verified_fix_suggestions,
 )
+from .llm_provider import RunLLMControls
 from .noise import FindingExclusions, RepositoryConfigError, load_finding_exclusions
 
 logger = logging.getLogger(__name__)
@@ -44,6 +47,74 @@ class RunIdentity:
     pull_request_number: int
     head_sha: str
     base_sha: str | None
+
+
+def _claim_evidence(claim: Claim, index: CodeIndex, initial: tuple[Evidence, ...]) -> tuple[Evidence, ...]:
+    """Select bounded, statically indexed evidence matching the claim subject."""
+    candidates: list[Evidence] = list(initial)
+    if claim.type is ClaimType.FUNCTION:
+        candidates.extend(
+            item for info in index.functions.get(claim.subject, [])
+            if (item := index.evidence(info.path, info.line)) is not None
+        )
+    elif claim.type is ClaimType.DEFAULT:
+        for functions in index.functions.values():
+            for function in functions:
+                if any(parameter.name == claim.subject for parameter in function.parameters):
+                    item = index.evidence(function.path, function.line)
+                    if item is not None:
+                        candidates.append(item)
+    elif claim.type is ClaimType.CLI_FLAG:
+        candidates.extend(
+            item for info in index.flags.get(claim.subject, [])
+            if (item := index.evidence(info.path, info.line)) is not None
+        )
+    elif claim.type is ClaimType.ENV_VAR:
+        candidates.extend(index.environment.get(claim.subject, []))
+    elif claim.type is ClaimType.ROUTE:
+        candidates.extend(
+            item for info in index.routes.get(claim.subject, [])
+            if (item := index.evidence(info.source_path, info.line)) is not None
+        )
+    elif claim.type is ClaimType.PYTHON_VERSION:
+        try:
+            text = (index.root / "pyproject.toml").read_text(encoding="utf-8")
+            for number, line in enumerate(text.splitlines(), 1):
+                if "requires-python" in line:
+                    item = index.evidence("pyproject.toml", number)
+                    if item is not None:
+                        candidates.append(item)
+                    break
+        except (OSError, UnicodeError):
+            pass
+    unique: dict[tuple[str, int, str], Evidence] = {}
+    for item in candidates:
+        if (len(unique) >= 16 or not isinstance(item, Evidence)
+                or len(item.snippet) > 4_000 or item.path not in index.files | {"pyproject.toml"}):
+            continue
+        if index.evidence(item.path, item.line) == item:
+            unique[(item.path, item.line, item.snippet)] = item
+    return tuple(unique.values())
+
+
+def _evidence_sufficient(claim: Claim, snippets: tuple[object, ...], citations: tuple[object, ...], index: CodeIndex) -> bool:
+    """Require current indexed source and a claim-subject anchor in cited snippets."""
+    del citations
+    if not snippets:
+        return False
+    subject = claim.subject.casefold()
+    for snippet in snippets:
+        path = getattr(snippet, "path", None)
+        line = getattr(snippet, "line", None)
+        text = getattr(snippet, "text", None)
+        if not isinstance(path, str) or not isinstance(line, int) or not isinstance(text, str):
+            return False
+        if path not in index.files | {"pyproject.toml"}:
+            return False
+        current = index.evidence(path, line)
+        if current is None or current.snippet != text:
+            return False
+    return any(subject in getattr(snippet, "text", "").casefold() for snippet in snippets)
 
 
 async def _claim_run(
@@ -224,6 +295,7 @@ async def _persist_findings_and_complete(
     findings: list[Finding],
     exclusions: FindingExclusions | None = None,
     markdown_added_lines: dict[str, frozenset[int]] | None = None,
+    llm_usage: dict[str, int | str] | None = None,
 ) -> str:
     """Replace results and mark the run complete atomically, only while it is active."""
     records = [
@@ -249,6 +321,8 @@ async def _persist_findings_and_complete(
         config = exclusions or FindingExclusions()
         run.inline_min_severity = config.inline_min
         run.max_inline_comments = config.max_inline_comments
+        if llm_usage is not None:
+            run.llm_usage = dict(llm_usage)
         await session.execute(delete(AnalysisFinding).where(AnalysisFinding.run_id == run_id))
         session.add_all(records)
         run.status = RunStatus.COMPLETED
@@ -264,6 +338,7 @@ async def run_analysis_pipeline(
     fix_candidate_client: FixCandidateClient | None = None,
     verification_client: GroundedVerificationClient | None = None,
     verified_fix_sink: list[VerifiedFixSuggestion] | None = None,
+    llm_controls: RunLLMControls | None = None,
 ) -> str:
     """Analyze impacted claims when exact mapping is safe; otherwise keep the full scan."""
     identity, state = await _claim_run(session_factory, run_id)
@@ -291,6 +366,28 @@ async def run_analysis_pipeline(
                 root, identity.base_sha, identity.head_sha
             )
             findings = await _analyze_repository(root, changed_paths)
+            code_index = build_index(root) if llm_controls is not None else None
+            effective_verification_client = verification_client
+            if llm_controls is not None and code_index is not None and not code_index.errors:
+                grounded_client = GroundedLLMClient(
+                    llm_controls,
+                    evidence_sufficient=lambda claim, snippets, citations: _evidence_sufficient(
+                        claim, snippets, citations, code_index
+                    ),
+                    timeout_seconds=llm_controls.timeout_seconds,
+                )
+                effective_verification_client = grounded_client
+                verified: list[Finding] = []
+                for finding in findings:
+                    context_evidence = _claim_evidence(
+                        finding.claim, code_index, finding.evidence
+                    )
+                    verified.append(
+                        await orchestrate_verification(
+                            finding.claim, finding, context_evidence, grounded_client
+                        )
+                    )
+                findings = verified
             exclusions = load_finding_exclusions(root, findings)
             if fix_candidate_client is not None and verified_fix_sink is not None:
                 verified_fix_sink.extend(
@@ -302,7 +399,7 @@ async def run_analysis_pipeline(
                         analyzed_head_sha=identity.head_sha,
                         current_head_sha=identity.head_sha,
                         exclusions=exclusions,
-                        verification_client=verification_client,
+                        verification_client=effective_verification_client,
                     )
                 )
     except RepositoryCheckoutError:
@@ -315,5 +412,10 @@ async def run_analysis_pipeline(
         raise AnalysisExecutionError("Deterministic analysis could not read the checked-out repository.") from error
 
     return await _persist_findings_and_complete(
-        session_factory, run_id, findings, exclusions, markdown_added_lines
+        session_factory,
+        run_id,
+        findings,
+        exclusions,
+        markdown_added_lines,
+        llm_usage=llm_controls.usage_record() if llm_controls is not None else None,
     )

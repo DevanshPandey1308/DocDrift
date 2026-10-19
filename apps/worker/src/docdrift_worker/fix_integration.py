@@ -35,7 +35,23 @@ class FixCandidateClient(Protocol):
 
     def propose_replacement(
         self, finding: Finding, evidence: tuple[Evidence, ...]
-    ) -> Awaitable[str | None]: ...
+    ) -> Awaitable[str | FixCandidateResponse | None]: ...
+
+
+@dataclass(frozen=True, slots=True)
+class FixCandidateResponse:
+    """A structured replacement plus actual provider-reported token usage."""
+
+    replacement: str | None
+    input_tokens: int | None = None
+    output_tokens: int | None = None
+
+    def __post_init__(self) -> None:
+        for value in (self.input_tokens, self.output_tokens):
+            if value is not None and (
+                isinstance(value, bool) or not isinstance(value, int) or value < 0
+            ):
+                raise ValueError("provider token usage must be a non-negative integer")
 
 
 @dataclass(frozen=True, slots=True)
@@ -157,13 +173,14 @@ async def prepare_verified_fix_suggestions(
             continue
 
         try:
-            replacement = await candidate_client.propose_replacement(finding, trusted)
+            proposal = await candidate_client.propose_replacement(finding, trusted)
         except Exception as error:  # noqa: BLE001 - provider errors must not affect deterministic reporting.
             logger.warning(
                 "fix_candidate_provider_failed",
                 extra={"claim_id": claim.id, "error_type": type(error).__name__},
             )
             continue
+        replacement = proposal.replacement if isinstance(proposal, FixCandidateResponse) else proposal
         if not isinstance(replacement, str):
             continue
         expected = claim.text[claim.span_start : claim.span_end]

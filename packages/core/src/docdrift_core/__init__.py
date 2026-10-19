@@ -16,6 +16,7 @@ from .index import build_index
 from .llm_client import (
     GroundedLLMClient,
     LLMProvider,
+    ProviderResponse,
     VerificationRequest,
     adapt_provider_response,
 )
@@ -62,6 +63,7 @@ __all__ = [
     "MarkdownValidationStatus",
     "PatchLimits",
     "PatchValidationError",
+    "ProviderResponse",
     "ReExtractionStatus",
     "ReVerificationStatus",
     "Verdict",

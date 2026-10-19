@@ -118,6 +118,9 @@ class Run(TimestampMixin, Base):
         server_default=PublicationStatus.PENDING.value,
     )
     github_check_run_id: Mapped[int | None] = mapped_column(BigInteger, nullable=True)
+    llm_usage: Mapped[dict[str, object]] = mapped_column(
+        JSON().with_variant(JSONB(), "postgresql"), nullable=False, default=dict, server_default="{}"
+    )
 
     repository: Mapped[Repository] = relationship(back_populates="runs")
     findings: Mapped[list[AnalysisFinding]] = relationship(

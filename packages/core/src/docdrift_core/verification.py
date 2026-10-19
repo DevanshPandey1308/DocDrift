@@ -79,6 +79,8 @@ class VerificationResult:
     verdict: VerificationVerdict
     evidence_refs: tuple[EvidenceCitation, ...]
     rationale: str
+    input_tokens: int | None = None
+    output_tokens: int | None = None
 
 
 EvidenceSufficiencyGate = Callable[

@@ -1,6 +1,6 @@
 # DocDrift
 
-DocDrift is a local, evidence-driven detector for a narrow set of documentation claims that can be checked against repository source. Phase 1 provides a reusable Python core and a CLI; it never imports scanned code and makes no network or model calls.
+DocDrift is an evidence-driven detector for a narrow set of documentation claims that can be checked against repository source. The reusable Python core and CLI are deterministic and make no network or model calls. The API worker can optionally use the configured Anthropic provider for grounded prose verification and verified in-diff fix suggestions.
 
 ## Current capabilities
 
@@ -44,6 +44,8 @@ if (-not (Test-Path .venv\Scripts\python.exe)) { py -3 -m venv .venv }
 ```
 
 The API and worker read configuration from environment variables. `DOCDRIFT_API_TITLE` (default `DocDrift API`) and `DOCDRIFT_API_VERSION` (default `0.1.0`) configure API metadata. `DOCDRIFT_GITHUB_WEBHOOK_SECRET`, `DOCDRIFT_DATABASE_URL`, and `DOCDRIFT_REDIS_URL` are required for pull-request intake and processing; app import and `GET /health` do not require GitHub credentials. Check Run publishing additionally requires `DOCDRIFT_GITHUB_APP_ID` and `DOCDRIFT_GITHUB_APP_PRIVATE_KEY`; the latter accepts PEM text with literal `\n` line breaks or real newlines. Keep these values in a local secret store or environment, never in source control. Use an async PostgreSQL URL such as `postgresql+asyncpg://user:password@localhost:5432/docdrift`; common `postgresql://` URLs are adapted to asyncpg. Redis accepts `redis://` and TLS `rediss://` URLs.
+
+Grounded Claude verification and candidate-fix proposals are opt-in in the worker. Install the optional SDK with `python -m pip install -e ".[api,llm,dev]"`, then configure the worker environment with `DOCDRIFT_LLM_ENABLED=true`, `ANTHROPIC_API_KEY`, `DOCDRIFT_ANTHROPIC_VERIFICATION_MODEL`, and `DOCDRIFT_ANTHROPIC_FIX_MODEL`. Model identifiers are supplied by the operator; DocDrift does not assume that a sample model name remains available. `DOCDRIFT_LLM_TIMEOUT_SECONDS` defaults to 20 and is bounded at 60 seconds. `DOCDRIFT_LLM_RUN_TOKEN_BUDGET` defaults to 20,000. Missing credentials, model identifiers, SDK, or explicit enablement leaves worker analysis deterministic-only. The SDK uses structured JSON output with no tools. Responses still pass through the existing citation validator, trusted source-evidence gate, edited-region re-verification, delivery planner, and publisher checks. Provider usage reported by Anthropic is summarized on the run; request caching and the token budget are scoped to one worker run. No token-to-currency estimate or monthly cap is provided.
 
 For a disposable local integration environment, first start Docker Desktop and confirm its daemon is ready:
 
@@ -192,6 +194,6 @@ Optional development tools are pytest, Ruff, and mypy. Their configuration is in
 
 The dependency direction is CLI adapter → core. The core has no CLI, web, GitHub, or infrastructure dependencies. Source indexing uses `ast.parse` and safe literal parsing only. Paths are resolved within the repository root. No source code or documentation examples are executed.
 
-Current limitations include a limited Markdown grammar, top-level/module-name ambiguity for same-named functions, literal-only static resolution, `argparse`-focused CLI recognition, and no general Python version range parser. Impact selection currently uses exact static names and narrows only addition-only Python diffs; other changes use a full scan. The `.docdrift.yml` support is intentionally limited to document path exclusions and exact claim-ID ignores. Click and Typer declarations, overloaded/dynamic semantics, arbitrary prose, semantic impact retrieval, and automatic fixes are not yet supported. No benchmark performance claim has been made.
+Current limitations include a limited Markdown grammar, top-level/module-name ambiguity for same-named functions, literal-only static resolution, `argparse`-focused CLI recognition, and no general Python version range parser. Impact selection currently uses exact static names and narrows only addition-only Python diffs; other changes use a full scan. The `.docdrift.yml` support is intentionally limited to document path exclusions and exact claim-ID ignores. Click and Typer declarations, overloaded/dynamic semantics, and arbitrary prose are not supported. LLM verification remains subject to bounded indexed evidence and strict citation/sufficiency checks. Fix suggestions are only possible when every claim in the edited region verifies true and the existing in-diff publisher guards pass. No benchmark performance claim has been made.
 
 Future milestones may add broader checker coverage, changed-symbol selection using Git diffs, a reproducible benchmark, and hosted adapters. They are not implemented in this phase.

@@ -18,6 +18,7 @@ from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 from .checkout import RepositoryCheckoutError
 from .fix_integration import FixCandidateClient, VerifiedFixSuggestion
 from .github import GitHubPublicationError
+from .llm_provider import AnthropicDocDriftProvider, RunLLMControls
 from .pipeline import run_analysis_pipeline
 from .publication import publish_completed_run
 
@@ -44,6 +45,20 @@ def create_worker(
     if not worker_settings.database_url:
         raise ValueError("DOCDRIFT_DATABASE_URL must be configured for the worker.")
 
+    llm_provider: AnthropicDocDriftProvider | None = None
+    if worker_settings.llm_enabled and worker_settings.anthropic_api_key and worker_settings.anthropic_verification_model and worker_settings.anthropic_fix_model:
+        try:
+            llm_provider = AnthropicDocDriftProvider.from_api_key(
+                worker_settings.anthropic_api_key,
+                verification_model=worker_settings.anthropic_verification_model,
+                fix_model=worker_settings.anthropic_fix_model,
+                timeout_seconds=worker_settings.llm_timeout_seconds,
+            )
+        except ImportError:
+            logger.warning("llm_provider_unavailable", extra={"reason": "optional_sdk_missing"})
+    elif worker_settings.llm_enabled:
+        logger.warning("llm_provider_unavailable", extra={"reason": "incomplete_configuration"})
+
     return Worker(
         functions=[process_run],
         redis_settings=redis_settings,
@@ -54,6 +69,10 @@ def create_worker(
             "settings": worker_settings,
             "fix_candidate_client": fix_candidate_client,
             "verification_client": verification_client,
+            "llm_provider": llm_provider,
+            "llm_token_budget": worker_settings.llm_run_token_budget,
+            "llm_timeout_seconds": worker_settings.llm_timeout_seconds,
+            "llm_controls_by_run": {},
         },
         max_tries=MAX_JOB_TRIES,
         job_timeout=JOB_TIMEOUT_SECONDS,
@@ -79,6 +98,9 @@ async def on_shutdown(ctx: dict[str, Any]) -> None:
     ctx.pop("session_factory", None)
     if engine is not None:
         await dispose_engine(engine)
+    provider = ctx.get("llm_provider")
+    if isinstance(provider, AnthropicDocDriftProvider):
+        await provider.close()
     logger.info("worker_stopped")
 
 
@@ -112,10 +134,27 @@ async def process_run(ctx: dict[str, Any], run_id: int) -> dict[str, str | int]:
 
     try:
         verified_fix_suggestions: list[VerifiedFixSuggestion] = []
+        provider = ctx.get("llm_provider")
+        controls_by_run = ctx.setdefault("llm_controls_by_run", {})
+        llm_controls = None
+        if isinstance(provider, AnthropicDocDriftProvider) and isinstance(controls_by_run, dict):
+            existing = controls_by_run.get(run_id)
+            if isinstance(existing, RunLLMControls):
+                llm_controls = existing
+            else:
+                llm_controls = RunLLMControls(
+                    provider,
+                    token_budget=ctx.get("llm_token_budget", 20_000),
+                    timeout_seconds=ctx.get("llm_timeout_seconds", 20.0),
+                )
+                controls_by_run[run_id] = llm_controls
+        effective_fix_client = ctx.get("fix_candidate_client") or llm_controls
         analysis_options: dict[str, Any] = {
             "checkout_component": ctx.get("checkout_component")
         }
-        candidate_client = ctx.get("fix_candidate_client")
+        candidate_client = effective_fix_client
+        if llm_controls is not None:
+            analysis_options["llm_controls"] = llm_controls
         if candidate_client is not None:
             analysis_options.update(
                 fix_candidate_client=candidate_client,
@@ -198,6 +237,9 @@ async def process_run(ctx: dict[str, Any], run_id: int) -> dict[str, str | int]:
         "run_processing_finished",
         extra={"run_id": run_id, "state": state, "publication_status": publication},
     )
+    controls_by_run = ctx.get("llm_controls_by_run")
+    if isinstance(controls_by_run, dict):
+        controls_by_run.pop(run_id, None)
     return {"run_id": run_id, "state": state, "publication": publication}
 
 

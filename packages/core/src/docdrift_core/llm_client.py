@@ -23,7 +23,18 @@ MAX_EVIDENCE_SNIPPETS = 16
 MAX_EVIDENCE_SNIPPET_CHARS = 4_000
 MAX_TOTAL_EVIDENCE_CHARS = 16_000
 MAX_PROVIDER_TIMEOUT_SECONDS = 60.0
-ProviderResponse = str | Mapping[str, object]
+@dataclass(frozen=True, slots=True)
+class ProviderResponse:
+    """Structured provider output with optional provider-reported usage."""
+
+    output: str | Mapping[str, object]
+    input_tokens: int | None = None
+    output_tokens: int | None = None
+
+    def __post_init__(self) -> None:
+        for value in (self.input_tokens, self.output_tokens):
+            if value is not None and (isinstance(value, bool) or not isinstance(value, int) or value < 0):
+                raise ValueError("provider token usage must be a non-negative integer")
 
 
 @dataclass(frozen=True, slots=True)
@@ -56,7 +67,9 @@ class VerificationRequest:
 class LLMProvider(Protocol):
     """Minimal provider contract; implementations must return structured JSON output."""
 
-    async def verify(self, request: VerificationRequest) -> ProviderResponse:
+    async def verify(
+        self, request: VerificationRequest
+    ) -> ProviderResponse | str | Mapping[str, object]:
         """Return a JSON object or its JSON text representation for this request."""
 
 
@@ -81,6 +94,10 @@ def adapt_provider_response(
     evidence_sufficient: EvidenceSufficiencyGate,
 ) -> VerificationResult:
     """Decode strict JSON, then delegate all verdict/citation acceptance to core validation."""
+    usage: tuple[int | None, int | None] = (None, None)
+    if isinstance(response, ProviderResponse):
+        usage = (response.input_tokens, response.output_tokens)
+        response = response.output
     if isinstance(response, str):
         try:
             payload: object = json.loads(
@@ -101,12 +118,13 @@ def adapt_provider_response(
             "Provider returned an unsupported structured response type.",
         )
 
-    return validate_verification_output(
+    result = validate_verification_output(
         claim,
         payload,
         evidence,
         evidence_sufficient=evidence_sufficient,
     )
+    return VerificationResult(result.verdict, result.evidence_refs, result.rationale, *usage)
 
 
 class GroundedLLMClient:

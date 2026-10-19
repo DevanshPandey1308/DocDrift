@@ -20,8 +20,8 @@ Citation matching establishes that quoted text came from the current evidence se
 does not establish that the text entails the claim. For that reason a `true` or `false`
 result is accepted only when a trusted deterministic evidence-sufficiency gate is supplied
 and approves the cited snippets. Missing, failing, or negative gates and all malformed or
-unmatched output become `abstain`. This contract is not connected to the analysis worker,
-persisted findings, or GitHub publication; current PR behavior remains deterministic.
+unmatched output become `abstain`. The worker's gate additionally confirms that cited
+snippets are exact current lines from the static source index and contain the claim subject.
 
 `docdrift_core.llm_client` adds an asynchronous `LLMProvider` protocol and a thin client
 that accepts only a `VerificationRequest` built from the existing claim and evidence
@@ -30,7 +30,10 @@ snippet types. Requests are bounded to 16 snippets, 4,000 characters per snippet
 more than 60 seconds, plus the trusted evidence-sufficiency gate. Provider responses may
 be a JSON object or JSON text; duplicate JSON keys, malformed output, provider errors and
 timeouts all abstain without exposing provider exception details. Cancellation propagates.
-No provider SDK, credentials, or production pipeline integration is included.
+The optional worker adapter uses Anthropic's official async SDK and structured JSON output;
+the SDK is an optional `llm` dependency. It has no tools or repository access. Enablement,
+API key, and model identifiers are explicit environment settings. With the feature disabled
+or incompletely configured, analysis remains deterministic-only.
 
 `docdrift_core.orchestration.orchestrate_verification` is an explicit opt-in adapter
 for callers that have a deterministic `unverifiable` finding and already-selected
@@ -43,8 +46,19 @@ is accepted only when it is the existing `VerificationResult` contract and its c
 resolve to exact supplied snippets; true/false results must come from a `GroundedLLMClient`
 that applied its required trusted evidence-sufficiency gate. Accepted findings record
 `grounded_llm` and `deterministic=False`; client failures, malformed results, and invalid
-citations become `unverifiable`. This function is not wired into the analysis pipeline or
-GitHub publication, so current production findings remain deterministic.
+citations become `unverifiable`. The worker routes only eligible deterministic
+`unverifiable` findings through this function; deterministic `true` and `false` results
+remain authoritative.
+
+Each worker invocation creates a run-scoped serialized call/cache boundary. Its semantic
+cache key includes claim, evidence, configured model, prompt version, and response schema.
+The configured per-run token budget reserves a conservative UTF-8 request-size upper bound
+plus the fixed output-token cap before each provider operation, then tracks actual
+provider-reported input/output tokens after responses.
+Usage summaries (calls, failures, token counts, and configured budget) are persisted on the
+run by migration `0007_llm_usage`. The cache is in memory for that run and survives ARQ
+retries handled by the same worker process, but is not shared across worker restarts. No
+currency costs or monthly repository limits are estimated.
 
 Repository content is untrusted data. The engine does not execute code, use `eval`/`exec`, retrieve secrets or environment values, or make network calls. File path claims are resolved and constrained to the repository root. Route and CLI recognizers use AST shape and literal values; they do not import FastAPI, Flask, Click, or Typer. Router mounting and prefixes are not fully resolved, so uncertain route claims abstain.
 
@@ -74,7 +88,7 @@ supported by DocDrift. It never writes the document or publishes a fix.
 
 The worker stores a review-comment line only when the claim's exact Markdown line appears as an added line in the no-renames unified diff between the run's pinned base and head. This covers additions and the new side of modifications; unchanged context, deletions, malformed diffs, and unsupported paths have no inline anchor and remain in the Check Run and summary. Publication rechecks the open pull request's base and head before sending plain `RIGHT`-side comments. It enforces the run's severity threshold and comment budget, excludes ignored findings, and uses a stable hidden marker so retries can update an existing comment.
 
-`docdrift_worker.fix_integration` is an opt-in boundary for fix proposals. It calls an injected `FixCandidateClient` only for deterministic false findings that have unignored, current-checkout evidence. It accepts replacement text for the existing extracted span, uses the core patch builder and full edited-region reverification, then passes the complete result, patch, claim, revision, and changed-line map to the delivery planner. The default worker has no proposal provider configured, so existing deterministic behavior remains unchanged unless a caller explicitly injects one. Provider errors, stale evidence, unsuccessful reverification, invalid locations, and out-of-diff targets produce no suggestion.
+`docdrift_worker.fix_integration` calls a configured `FixCandidateClient` only for deterministic false findings that have unignored, current-checkout evidence. The Anthropic adapter returns only a structured replacement string for the existing span; the core patch builder and full edited-region reverification then pass the complete result, patch, claim, revision, and changed-line map to the delivery planner. Without explicit LLM enablement and complete configuration, the default worker has no proposal provider configured. Provider errors, stale evidence, unsuccessful reverification, invalid locations, and out-of-diff targets produce no suggestion.
 
 `docdrift_worker.fix_delivery.plan_verified_fix_delivery` is a pure planning boundary. It requires the complete successful edited-region verification result, a patch that exactly matches that result, a valid changed-line map, and matching analyzed/current PR head SHAs. A safe target line in the PR diff selects `inline_suggestion`; all other cases retain the existing finding as the annotation/summary fallback. The worker passes planner-approved suggestions to the publisher in memory during the same job invocation. The publisher substitutes a GitHub suggestion block into that finding's existing budgeted inline comment only when the plan, finding, location, and head still match and the live PR revision check succeeds. Existing severity thresholds, comment budgets, ignore rules, run idempotency, and stale-run protections still apply. Candidate patches and verification results are not persisted, so a retry after transient proposal data is lost safely publishes the original finding without a suggestion.
 
