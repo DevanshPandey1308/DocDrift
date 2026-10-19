@@ -34,6 +34,12 @@ const MetricsSchema = z.object({ accepted_fixes: z.number(), rejected_fixes: z.n
 const FeedbackSchema = z.object({ id: z.number(), finding_id: z.number(), run_id: z.number(), repository_id: z.number(),
   category: z.string(), reason: z.string().nullable(), actor_github_user_id: z.number().nullable(), created_at: z.string() });
 
+export type Repository = z.infer<typeof RepositorySchema>;
+export type RunSummary = z.infer<typeof RunSchema>;
+export type RunDetail = z.infer<typeof RunDetailSchema>;
+export type Finding = RunDetail["findings"][number];
+export type FeedbackCategory = "fix_accepted" | "fix_rejected" | "false_positive";
+
 async function unwrap<T>(result: { data?: T; error?: unknown; response: Response }): Promise<T> {
   if (!result.response.ok) {
     const payload = typeof result.error === "object" && result.error !== null
@@ -59,14 +65,14 @@ export async function getRuns(repositoryId: number) {
   })));
 }
 export async function getRun(runId: number) {
-  return RunDetailSchema.parse(await unwrap(await client.GET("/runs/{run_id}", { params: { path: { run_id: runId } })));
+  const result = await client.GET("/runs/{run_id}", { params: { path: { run_id: runId } } });
+  return RunDetailSchema.parse(await unwrap(result));
 }
 export async function getMetrics(repositoryId: number) {
   return MetricsSchema.parse(await unwrap(await client.GET("/repositories/{repository_id}/feedback/metrics", {
     params: { path: { repository_id: repositoryId } },
   })));
 }
-export type FeedbackCategory = "fix_accepted" | "fix_rejected" | "false_positive";
 export async function submitFeedback(target: "suggestions" | "findings", id: number, category: FeedbackCategory, idempotencyKey = crypto.randomUUID()) {
   const csrf = document.cookie.split(";").map((item) => item.trim()).find((item) => item.startsWith("docdrift_csrf="))?.split("=").slice(1).join("=");
   if (!csrf) throw new ApiError(403, "Your session is missing its CSRF token. Reload and try again.");

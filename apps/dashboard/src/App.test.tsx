@@ -1,5 +1,5 @@
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
-import { fireEvent, render, screen, waitFor } from "@testing-library/react";
+import { render, screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { delay, http, HttpResponse } from "msw";
 import { MemoryRouter } from "react-router-dom";
@@ -84,6 +84,25 @@ describe("dashboard", () => {
     expect(await screen.findByText("No repositories available")).toBeInTheDocument();
   });
 
+  it("keeps long repository and source paths readable in their existing views", async () => {
+    const longRepository = `${"o".repeat(39)}/${"r".repeat(90)}`;
+    const longPath = `docs/${"nested-directory/".repeat(9)}reference-guide.md`;
+    server.use(
+      http.get(`${API}/repositories`, () => HttpResponse.json([{ id: 12, full_name: longRepository }])),
+      http.get(`${API}/runs/:run_id`, () => HttpResponse.json({
+        ...detail,
+        findings: [{ ...detail.findings[0], document_path: longPath, document_line: 874,
+          evidence: [{ ...detail.findings[0].evidence[0], path: `src/${"deep-module/".repeat(8)}handlers.py` }] }],
+      })),
+    );
+    const detailView = mount("/runs/31");
+    expect(await screen.findByText((_content, element) => element?.textContent === `${longPath}:874`)).toBeInTheDocument();
+    expect(screen.getByText((_content, element) => element?.textContent === `src/${"deep-module/".repeat(8)}handlers.py:4`)).toBeInTheDocument();
+    detailView.unmount();
+    mount("/repositories");
+    expect(await screen.findByText(longRepository)).toBeInTheDocument();
+  });
+
   it("reports forbidden API responses without showing private data", async () => {
     server.use(http.get(`${API}/repositories`, () => HttpResponse.json({ detail: "Forbidden" }, { status: 403 })));
     mount();
@@ -97,11 +116,14 @@ describe("dashboard", () => {
     await waitFor(() => expect(screen.getAllByText("—").length).toBeGreaterThan(0));
   });
 
-  it("offers keyboard-operable repository navigation", async () => {
+  it("marks the current section and supports keyboard navigation", async () => {
+    const user = userEvent.setup();
     mount();
-    const link = await screen.findByRole("link", { name: /octo\/example/i });
-    link.focus();
-    expect(link).toHaveFocus();
-    fireEvent.keyDown(link, { key: "Enter" });
+    const repositoryLink = await screen.findByRole("link", { name: /octo\/example/i });
+    repositoryLink.focus();
+    expect(repositoryLink).toHaveFocus();
+    await user.keyboard("{Enter}");
+    expect(await screen.findByRole("heading", { name: "octo/example" })).toBeInTheDocument();
+    expect(screen.getByRole("link", { name: "Repositories" })).toHaveAttribute("aria-current", "page");
   });
 });
