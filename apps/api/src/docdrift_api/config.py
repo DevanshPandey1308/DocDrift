@@ -5,6 +5,7 @@ from __future__ import annotations
 import math
 import os
 from dataclasses import dataclass, field
+from urllib.parse import urlsplit
 
 DEFAULT_TITLE = "DocDrift API"
 DEFAULT_VERSION = "0.1.0"
@@ -32,9 +33,21 @@ class Settings:
     github_oauth_client_secret: str | None = field(default=None, repr=False)
     dashboard_session_encryption_key: str | None = field(default=None, repr=False)
     dashboard_oauth_redirect_uri: str = "http://localhost:8000/auth/github/callback"
+    dashboard_origin: str = "http://localhost:5173"
     dashboard_cookie_secure: bool = True
 
     def __post_init__(self) -> None:
+        origin = urlsplit(self.dashboard_origin)
+        if (
+            origin.scheme not in {"http", "https"}
+            or not origin.netloc
+            or origin.username is not None
+            or origin.password is not None
+            or origin.path not in {"", "/"}
+            or origin.query
+            or origin.fragment
+        ):
+            raise ValueError("Dashboard origin must be an absolute HTTP(S) origin without a path.")
         if (
             isinstance(self.llm_timeout_seconds, bool)
             or not isinstance(self.llm_timeout_seconds, (int, float))
@@ -94,6 +107,7 @@ class Settings:
             dashboard_oauth_redirect_uri=(
                 os.getenv("DOCDRIFT_GITHUB_OAUTH_REDIRECT_URI", "http://localhost:8000/auth/github/callback").strip()
             ),
+            dashboard_origin=os.getenv("DOCDRIFT_DASHBOARD_ORIGIN", "http://localhost:5173").strip().rstrip("/"),
             dashboard_cookie_secure=os.getenv("DOCDRIFT_DASHBOARD_COOKIE_SECURE", "true").strip().lower()
             not in {"0", "false", "no"},
         )

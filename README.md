@@ -209,6 +209,7 @@ Migrations `0008_feedback_events` and `0009_dashboard_auth_suggestions` store ex
 keys, GitHub OAuth sessions, and exact successfully published suggestion identities. Apply them to a dedicated DocDrift database with
 `.\.venv\Scripts\alembic.exe -c .\apps\api\alembic.ini upgrade head`. Internal persistence
 and retrieval routes are available after GitHub OAuth sign-in: `GET /auth/github/login`,
+`GET /auth/session`, `GET /repositories`, `GET /repositories/{id}/runs`, `GET /runs/{id}`,
 `POST /suggestions/{id}/feedback`, `POST /findings/{id}/feedback`, `GET /runs/{id}/feedback`,
 `GET /findings/{id}/feedback`, and `GET /repositories/{id}/feedback/metrics`. Feedback POSTs
 require the `docdrift_csrf` cookie value in `X-CSRF-Token` and a JSON body such as
@@ -223,7 +224,12 @@ boundaries and dashboard prerequisites.
 
 For local OAuth, register a GitHub OAuth App with callback `http://localhost:8000/auth/github/callback`,
 set the three OAuth/encryption variables above, and set `DOCDRIFT_DASHBOARD_COOKIE_SECURE=false`
-for localhost HTTP. In production, register the exact HTTPS callback, keep secure cookies enabled,
+for localhost HTTP. Set `DOCDRIFT_DASHBOARD_ORIGIN` to the exact dashboard web origin (default
+`http://localhost:5173`); the API grants credentialed CORS only to that origin and redirects OAuth
+back to it. In production, set this to the dashboard's HTTPS origin, register the exact HTTPS callback, keep secure cookies enabled,
 and use a dedicated encryption key from the deployment secret store. OAuth scopes request `repo`
 and `read:org`; repository access is checked live against the signed-in user's OAuth token and the
 DocDrift installation record before each feedback read or write.
+
+The React dashboard setup, API type generation, local development commands, and mock-test limits
+are documented in [`docs/dashboard.md`](docs/dashboard.md).

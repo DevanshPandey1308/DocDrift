@@ -71,6 +71,68 @@ class MetricsResponse(BaseModel):
     acceptance_rate: float | None
 
 
+class SessionResponse(BaseModel):
+    github_login: str
+    github_user_id: int
+    expires_at: datetime
+
+
+class RepositoryResponse(BaseModel):
+    id: int
+    full_name: str
+
+
+class RunListItem(BaseModel):
+    id: int
+    repository_id: int
+    pull_request_number: int
+    head_sha: str
+    base_sha: str | None
+    status: str
+    publication_status: str
+    created_at: datetime
+    findings_count: int
+    false_count: int
+    unverifiable_count: int
+
+
+class EvidenceResponse(BaseModel):
+    path: str
+    line: int
+    snippet: str
+
+
+class SuggestionResponse(BaseModel):
+    id: int
+    publication_status: str
+    document_path: str
+    document_line: int
+    head_sha: str
+    published_at: datetime | None
+
+
+class FindingResponse(BaseModel):
+    id: int
+    claim_id: str
+    claim_type: str
+    subject: str
+    claim_text: str
+    document_path: str
+    document_line: int
+    verdict: str
+    explanation: str
+    verification_method: str
+    deterministic: bool
+    ignored: bool
+    ignore_reason: str | None
+    evidence: list[EvidenceResponse]
+    suggestions: list[SuggestionResponse]
+
+
+class RunDetailResponse(RunListItem):
+    findings: list[FindingResponse]
+
+
 def _digest(value: str) -> str:
     return hashlib.sha256(value.encode("utf-8")).hexdigest()
 
@@ -203,6 +265,153 @@ async def _authorized_repository(
 def create_dashboard_router(settings: Settings) -> APIRouter:
     router = APIRouter()
 
+    @router.get("/auth/session", response_model=SessionResponse, tags=["dashboard-auth"])
+    async def current_session(request: Request) -> SessionResponse:
+        record, _ = await _get_session(request)
+        return SessionResponse(
+            github_login=record.github_login,
+            github_user_id=record.github_user_id,
+            expires_at=record.expires_at,
+        )
+
+    @router.get("/repositories", response_model=list[RepositoryResponse], tags=["dashboard"])
+    async def repositories(request: Request) -> list[RepositoryResponse]:
+        _, token = await _get_session(request)
+        factory = request.app.state.session_factory
+        if factory is None:
+            raise HTTPException(503, "Database is unavailable.")
+        async with factory() as session:
+            rows = await session.scalars(
+                select(Repository)
+                .where(
+                    Repository.github_repository_id.is_not(None),
+                    Repository.installation_id.is_not(None),
+                )
+                .order_by(Repository.full_name, Repository.id)
+            )
+            candidates = list(rows)
+        # The installation inventory alone is insufficient for dashboard authorization.
+        # Reuse the existing live OAuth-user check before returning each repository.
+        authorized: list[RepositoryResponse] = []
+        for candidate in candidates:
+            try:
+                repo = await _authorized_repository(request, candidate.id, token)
+            except HTTPException as error:
+                if error.status_code == 404:
+                    continue
+                raise
+            authorized.append(RepositoryResponse(id=repo.id, full_name=repo.full_name))
+        return authorized
+
+    @router.get(
+        "/repositories/{repository_id}/runs",
+        response_model=list[RunListItem],
+        tags=["dashboard"],
+    )
+    async def repository_runs(
+        repository_id: int,
+        request: Request,
+        limit: int = 50,
+        offset: int = 0,
+    ) -> list[RunListItem]:
+        _, token = await _get_session(request)
+        await _authorized_repository(request, repository_id, token)
+        if not 1 <= limit <= MAX_PAGE_SIZE or offset < 0:
+            raise HTTPException(422, "Invalid pagination parameters.")
+        factory = request.app.state.session_factory
+        async with factory() as session:
+            rows = await session.scalars(
+                select(Run)
+                .where(Run.repository_id == repository_id)
+                .order_by(Run.created_at.desc(), Run.id.desc())
+                .limit(limit)
+                .offset(offset)
+            )
+            runs = list(rows)
+            output: list[RunListItem] = []
+            for run in runs:
+                findings = list(await session.scalars(
+                    select(AnalysisFinding).where(AnalysisFinding.run_id == run.id)
+                ))
+                active = [item for item in findings if not item.ignored]
+                output.append(RunListItem(
+                    id=run.id,
+                    repository_id=run.repository_id,
+                    pull_request_number=run.pull_request_number,
+                    head_sha=run.head_sha,
+                    base_sha=run.base_sha,
+                    status=str(run.status),
+                    publication_status=run.publication_status,
+                    created_at=run.created_at,
+                    findings_count=len(active),
+                    false_count=sum(item.verdict == "false" for item in active),
+                    unverifiable_count=sum(item.verdict == "unverifiable" for item in active),
+                ))
+        return output
+
+    @router.get("/runs/{run_id}", response_model=RunDetailResponse, tags=["dashboard"])
+    async def run_detail(run_id: int, request: Request) -> RunDetailResponse:
+        _, token = await _get_session(request)
+        factory = request.app.state.session_factory
+        async with factory() as session:
+            run = await session.get(Run, run_id)
+            if run is None:
+                raise HTTPException(404, "Resource not found.")
+            repository_id = run.repository_id
+            findings = list(await session.scalars(
+                select(AnalysisFinding)
+                .where(AnalysisFinding.run_id == run_id)
+                .order_by(AnalysisFinding.document_path, AnalysisFinding.document_line, AnalysisFinding.id)
+            ))
+            suggestions = list(await session.scalars(
+                select(PublishedSuggestion)
+                .where(PublishedSuggestion.run_id == run_id)
+                .order_by(PublishedSuggestion.id)
+            ))
+        await _authorized_repository(request, repository_id, token)
+        active = [item for item in findings if not item.ignored]
+        suggestion_map: dict[int, list[SuggestionResponse]] = {}
+        for item in suggestions:
+            suggestion_map.setdefault(item.finding_id, []).append(SuggestionResponse(
+                id=item.id,
+                publication_status=item.publication_status,
+                document_path=item.document_path,
+                document_line=item.document_line,
+                head_sha=item.head_sha,
+                published_at=item.published_at,
+            ))
+        details = [FindingResponse(
+            id=item.id,
+            claim_id=item.claim_id,
+            claim_type=item.claim_type,
+            subject=item.subject,
+            claim_text=item.claim_text,
+            document_path=item.document_path,
+            document_line=item.document_line,
+            verdict=item.verdict,
+            explanation=item.explanation,
+            verification_method=item.verification_method,
+            deterministic=item.deterministic,
+            ignored=item.ignored,
+            ignore_reason=item.ignore_reason,
+            evidence=[EvidenceResponse.model_validate(entry) for entry in item.evidence],
+            suggestions=suggestion_map.get(item.id, []),
+        ) for item in findings]
+        return RunDetailResponse(
+            id=run.id,
+            repository_id=run.repository_id,
+            pull_request_number=run.pull_request_number,
+            head_sha=run.head_sha,
+            base_sha=run.base_sha,
+            status=str(run.status),
+            publication_status=run.publication_status,
+            created_at=run.created_at,
+            findings_count=len(active),
+            false_count=sum(item.verdict == "false" for item in active),
+            unverifiable_count=sum(item.verdict == "unverifiable" for item in active),
+            findings=details,
+        )
+
     @router.get("/auth/github/login", tags=["dashboard-auth"])
     async def login() -> Response:
         if not _configured(settings):
@@ -276,7 +485,7 @@ def create_dashboard_router(settings: Settings) -> APIRouter:
                 encrypted_access_token=_fernet(settings).encrypt(access_token.encode()).decode(),
                 csrf_token_hash=_digest(csrf_token), expires_at=datetime.now(UTC) + SESSION_TTL,
             ))
-        response = RedirectResponse("/", status_code=303)
+        response = RedirectResponse(settings.dashboard_origin.rstrip("/"), status_code=303)
         response.delete_cookie("docdrift_oauth_state", path="/auth/github")
         response.set_cookie(SESSION_COOKIE, session_token, max_age=int(SESSION_TTL.total_seconds()),
                             httponly=True, secure=settings.dashboard_cookie_secure, samesite="lax", path="/")

@@ -66,6 +66,10 @@ class FeedbackMetricsTests(unittest.TestCase):
     def test_dashboard_routes_exist_and_require_auth_dependencies(self) -> None:
         paths = create_app(Settings()).openapi()["paths"]
         self.assertIn("/auth/github/login", paths)
+        self.assertIn("/auth/session", paths)
+        self.assertIn("/repositories", paths)
+        self.assertIn("/repositories/{repository_id}/runs", paths)
+        self.assertIn("/runs/{run_id}", paths)
         self.assertIn("/suggestions/{suggestion_id}/feedback", paths)
         self.assertIn("/findings/{finding_id}/feedback", paths)
         self.assertIn("/runs/{run_id}/feedback", paths)
@@ -82,9 +86,34 @@ class FeedbackMetricsTests(unittest.TestCase):
         app = create_app(Settings())
         with TestClient(app) as client:
             self.assertEqual(client.get("/auth/github/login").status_code, 503)
+            self.assertEqual(client.get("/auth/session").status_code, 401)
+            self.assertEqual(client.get("/repositories").status_code, 401)
+            self.assertEqual(client.get("/repositories/1/runs").status_code, 401)
+            self.assertEqual(client.get("/runs/1").status_code, 401)
             self.assertEqual(
                 client.get("/repositories/1/feedback/metrics").status_code, 401
             )
+
+    def test_dashboard_cors_allows_only_the_configured_frontend_origin(self) -> None:
+        app = create_app(Settings(dashboard_origin="http://localhost:5173"))
+        with TestClient(app) as client:
+            allowed = client.options(
+                "/auth/session",
+                headers={"Origin": "http://localhost:5173", "Access-Control-Request-Method": "GET"},
+            )
+            denied = client.options(
+                "/auth/session",
+                headers={"Origin": "https://untrusted.example", "Access-Control-Request-Method": "GET"},
+            )
+        self.assertEqual(allowed.headers.get("access-control-allow-origin"), "http://localhost:5173")
+        self.assertEqual(allowed.headers.get("access-control-allow-credentials"), "true")
+        self.assertNotIn("access-control-allow-origin", denied.headers)
+
+    def test_dashboard_origin_rejects_paths_and_non_http_schemes(self) -> None:
+        with self.assertRaisesRegex(ValueError, r"absolute HTTP\(S\) origin"):
+            Settings(dashboard_origin="https://example.test/dashboard")
+        with self.assertRaisesRegex(ValueError, r"absolute HTTP\(S\) origin"):
+            Settings(dashboard_origin="javascript:alert(1)")
 
 
 class FeedbackPersistenceTests(unittest.IsolatedAsyncioTestCase):

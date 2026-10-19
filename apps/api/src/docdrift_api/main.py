@@ -7,6 +7,7 @@ from contextlib import asynccontextmanager
 
 from arq.connections import ArqRedis
 from fastapi import FastAPI
+from fastapi.middleware.cors import CORSMiddleware
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 from sqlalchemy.ext.asyncio.engine import AsyncEngine
 
@@ -49,6 +50,13 @@ def create_app(
                 await dispose_engine(engine)
 
     application = FastAPI(title=app_settings.title, version=app_settings.version, lifespan=lifespan)
+    application.add_middleware(
+        CORSMiddleware,
+        allow_origins=[app_settings.dashboard_origin.rstrip("/")],
+        allow_credentials=True,
+        allow_methods=["GET", "POST", "OPTIONS"],
+        allow_headers=["Content-Type", "X-CSRF-Token"],
+    )
     application.state.settings = app_settings
     application.state.session_factory = session_factory
     application.state.redis_pool = redis_pool
