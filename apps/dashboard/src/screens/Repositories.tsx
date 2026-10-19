@@ -2,7 +2,7 @@ import { useQuery } from "@tanstack/react-query";
 import { Link, useParams } from "react-router-dom";
 import { getRepositories, getRuns } from "../api/client";
 import { Breadcrumbs, EmptyState, ErrorPanel, LoadingState, PageHeader, StatusBadge } from "../components/ui";
-import { formatDate } from "./Overview";
+import { formatDate } from "../utils/date";
 
 export function Repositories() {
   const repositories = useQuery({ queryKey: ["repositories"], queryFn: getRepositories });

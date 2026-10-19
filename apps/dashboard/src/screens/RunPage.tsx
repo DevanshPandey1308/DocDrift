@@ -4,13 +4,13 @@ import { useParams } from "react-router-dom";
 import { getMetrics, getRun, submitFeedback, type FeedbackCategory } from "../api/client";
 import { FindingCard } from "../components/FindingCard";
 import { Breadcrumbs, EmptyState, ErrorPanel, LoadingState, MetricCard, MetricStrip, PageHeader } from "../components/ui";
-import { formatDate } from "./Overview";
+import { formatDate } from "../utils/date";
 
 export function RunPage() {
   const { runId } = useParams();
   const id = Number(runId);
   const queryClient = useQueryClient();
-  const retryKeys = useRef(new Map<string, string>());
+  const retryKeys = useRef(new Map<string, ReturnType<typeof crypto.randomUUID>>());
   const run = useQuery({ queryKey: ["run", id], queryFn: () => getRun(id), enabled: Number.isInteger(id) && id > 0 });
   const metrics = useQuery({
     queryKey: ["metrics", run.data?.repository_id],

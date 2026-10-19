@@ -1,11 +1,11 @@
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
-import { render, screen, waitFor } from "@testing-library/react";
+import { render, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { delay, http, HttpResponse } from "msw";
 import { MemoryRouter } from "react-router-dom";
 import { describe, expect, it } from "vitest";
 import App from "./App";
-import { API } from "./test/handlers";
+import { API, detail } from "./test/handlers";
 import { server } from "./test/server";
 
 function mount(path = "/") {
@@ -17,7 +17,7 @@ describe("dashboard", () => {
   it("shows a real unauthenticated state for a 401 session", async () => {
     server.use(http.get(`${API}/auth/session`, () => HttpResponse.json({ detail: "Authentication required." }, { status: 401 })));
     mount();
-    expect(await screen.findByRole("button", { name: /sign in with github/i })).toBeInTheDocument();
+    expect(await screen.findByRole("button", { name: /continue with github/i })).toBeInTheDocument();
     expect(screen.queryByText("octo/example")).not.toBeInTheDocument();
   });
 
@@ -33,8 +33,8 @@ describe("dashboard", () => {
 
   it("renders authenticated overview and navigates to repository runs", async () => {
     const user = userEvent.setup(); mount();
-    expect(await screen.findByText("octo/example")).toBeInTheDocument();
-    await user.click(screen.getAllByText("octo/example")[0]);
+    const repositoryLink = await screen.findByRole("link", { name: /octo\/example.*open pull request runs/i });
+    await user.click(repositoryLink);
     expect(await screen.findByRole("heading", { name: "octo/example" })).toBeInTheDocument();
     expect(await screen.findByRole("link", { name: /pull request 48/i })).toBeInTheDocument();
   });
@@ -43,10 +43,10 @@ describe("dashboard", () => {
     document.cookie = "docdrift_csrf=test-token; path=/";
     const user = userEvent.setup(); mount("/runs/31");
     expect(await screen.findByText("The create_user function accepts name and email.")).toBeInTheDocument();
-    expect(screen.getByText("src/api.py:4")).toBeInTheDocument();
+    expect(screen.getByText((_content, element) => element?.textContent === "src/api.py:4")).toBeInTheDocument();
     expect(screen.getByText("def create_user(name):")).toBeInTheDocument();
     await user.click(screen.getByRole("button", { name: "Accept" }));
-    expect(await screen.findByRole("status", { name: /feedback recorded/i })).toBeInTheDocument();
+    expect(await screen.findByText("Feedback recorded: fix accepted.")).toBeInTheDocument();
   });
 
   it("reuses the same idempotency key when the maintainer retries a failed feedback request", async () => {
@@ -62,9 +62,9 @@ describe("dashboard", () => {
     }));
     const user = userEvent.setup(); mount("/runs/31");
     await user.click(await screen.findByRole("button", { name: "Accept" }));
-    expect(await screen.findByRole("alert")).toHaveTextContent(/retry the same action/i);
+    expect(await screen.findByRole("alert")).toHaveTextContent(/retry this action to safely reuse its idempotency key/i);
     await user.click(screen.getByRole("button", { name: "Accept" }));
-    expect(await screen.findByRole("status", { name: /feedback recorded/i })).toBeInTheDocument();
+    expect(await screen.findByText("Feedback recorded: fix accepted.")).toBeInTheDocument();
     expect(keys).toHaveLength(2);
     expect(keys[1]).toBe(keys[0]);
   });
@@ -119,11 +119,12 @@ describe("dashboard", () => {
   it("marks the current section and supports keyboard navigation", async () => {
     const user = userEvent.setup();
     mount();
-    const repositoryLink = await screen.findByRole("link", { name: /octo\/example/i });
+    const repositoryLink = await screen.findByRole("link", { name: /octo\/example.*open pull request runs/i });
     repositoryLink.focus();
     expect(repositoryLink).toHaveFocus();
     await user.keyboard("{Enter}");
     expect(await screen.findByRole("heading", { name: "octo/example" })).toBeInTheDocument();
-    expect(screen.getByRole("link", { name: "Repositories" })).toHaveAttribute("aria-current", "page");
+    expect(within(screen.getByRole("navigation", { name: "Main navigation" }))
+      .getByRole("link", { name: "Repositories" })).toHaveAttribute("aria-current", "page");
   });
 });

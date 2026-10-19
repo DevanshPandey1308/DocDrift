@@ -2,6 +2,7 @@ import { useQuery } from "@tanstack/react-query";
 import { Link } from "react-router-dom";
 import { getMetrics, getRepositories, getRuns } from "../api/client";
 import { EmptyState, ErrorPanel, LoadingState, MetricCard, MetricStrip, PageHeader, StatusBadge } from "../components/ui";
+import { formatDate } from "../utils/date";
 
 export function Overview() {
   const repositories = useQuery({ queryKey: ["repositories"], queryFn: getRepositories });
@@ -82,8 +83,4 @@ export function Overview() {
 
 function Header() {
   return <PageHeader eyebrow="Workspace" title="Overview" description="Repository checks and explicit maintainer feedback." />;
-}
-
-export function formatDate(value: string) {
-  return new Intl.DateTimeFormat(undefined, { dateStyle: "medium", timeStyle: "short" }).format(new Date(value));
 }
