@@ -34,6 +34,10 @@ python .\docdrift.py check --repo . --docs docs --source packages
 
 Repeat `--docs` or `--source` to configure several scopes. Defaults scan the repository root. JSON output has `schema_version`, `findings`, and `errors`; model fields are stable and enum values are lowercase strings.
 
+## MCP server
+
+Install the optional MCP integration with `python -m pip install -e ".[mcp]"`, then configure your MCP client to launch `docdrift-mcp` over stdio. It exposes local deterministic repository checks and bounded finding/evidence inspection; it does not require the API infrastructure or Anthropic credentials. See [Local MCP server](docs/mcp.md) for the tool schemas, safety limits, and client configuration example.
+
 ## API and worker setup
 
 From the repository root, create a virtual environment if needed and install the API, worker, and development dependencies:

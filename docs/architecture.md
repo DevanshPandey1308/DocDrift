@@ -1,10 +1,18 @@
 # Architecture
 
-DocDrift is split into `docdrift-core` and `docdrift-cli`. The core owns stable domain models, Markdown extraction, a static source index, checker registry, and the reusable analysis pipeline. The CLI parses arguments and renders core results; it does not implement verification rules.
+DocDrift is split into `docdrift-core` and thin adapters including the CLI and optional local MCP server. The core owns stable domain models, Markdown extraction, a static source index, checker registry, and the reusable analysis pipeline. Adapters parse input and render core results; they do not implement verification rules.
 
 The pipeline discovers Markdown within explicit scopes, extracts supported claims, parses Python files using `ast.parse` without importing them, builds a source index for symbols, CLI flags, and routes, then dispatches each claim through a checker registry. Findings preserve original document text and stable IDs. Evidence snippets are read from the actual repository file at the recorded line. Source parse errors are separate structured errors.
 
 The exact-name inverted index maps claim subjects to claim IDs for future changed-symbol selection. The initial command performs full scans. Future adapters can consume the core models without depending on CLI presentation.
+
+`docdrift_mcp` is an optional stdio adapter over `docdrift_core.analyze`. It exposes a
+full local scan, paginated structured findings, and bounded evidence lookup. Check
+snapshots are held in a small in-memory cache for the server process; this adapter does
+not use GitHub, persistence, Redis, or the optional LLM provider. Repository scope
+validation rejects explicit traversal and symlinks resolving outside the selected root,
+but it is not an operating-system filesystem sandbox. See [docs/mcp.md](mcp.md) for
+installation, tool schemas, output bounds, and the generic client configuration example.
 
 ## Grounded verification contract
 
