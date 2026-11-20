@@ -15,7 +15,7 @@ _PATTERNS: tuple[tuple[ClaimType, re.Pattern[str]], ...] = (
     (ClaimType.DEFAULT, re.compile(r"(?:the\s+)?default\s+(?:for\s+)?`?([A-Za-z_]\w*)`?\s+is\s+(`[^`]+`|[^.,;]+)", re.I)),
     (ClaimType.CLI_FLAG, re.compile(r"(?:(?:run|invoke|use)(?:\s+the)?\s+(?:CLI|command)(?:\s+with)?\s+)?(`--[A-Za-z][\w-]*)`", re.I)),
     (ClaimType.ENV_VAR, re.compile(r"(?:environment variable\s+)?`([A-Z][A-Z0-9_]*)`(?:\s+environment variable)?", re.I)),
-    (ClaimType.FILE_PATH, re.compile(r"`((?:[\w.-]+/)+[\w.-]+|[\w.-]+\.py)`")),
+    (ClaimType.FILE_PATH, re.compile(r"`([^`]+)`")),
     (ClaimType.PYTHON_VERSION, re.compile(r"requires\s+Python\s+([0-9]+(?:\.[0-9]+){0,2})\s+or newer", re.I)),
 )
 _PARAMS = re.compile(r"\s*\*{0,2}([A-Za-z_]\w*)\s*(?:=.*)?\s*")
@@ -35,6 +35,8 @@ _VERSION_FORMS = re.compile(
 )
 _TABLE_IDENTIFIER = re.compile(r"^`([A-Za-z_]\w*)`$")
 _TABLE_SEPARATOR = re.compile(r"^:?-{3,}:?$")
+_PATH_EXTENSION = re.compile(r"\.[A-Za-z0-9_-]+$")
+_NOISE_PATHS = {"n/a", "i/o", "and/or", "w/o", "tcp/ip"}
 _TUTORIAL_FILE_INSTRUCTIONS: tuple[re.Pattern[str], ...] = (
     re.compile(r"^\s*(?:[-*+]\s+)?(?:now\s+)?create\s+(?:(?:a|an|another|the|new)\s+)?(?:empty\s+|demo\s+)?(?:file|module)(?:/module)?\s+`([^`]+)`(?:\s+(?:with|containing)\b.*|[.:]?\s*$)", re.I),
     re.compile(r"^\s*(?:[-*+]\s+)?(?:now\s+)?create\s+(?:(?:a|an|another|new)\s+)?`([^`]+)`(?:\s+(?:file|module))?(?:\s+(?:with|containing|in|inside|under)\b.*|[.:]?\s*$)", re.I),
@@ -59,6 +61,30 @@ def _is_tutorial_file_instruction(line: str, path: str) -> bool:
     if _TUTORIAL_SIBLING_FILES.search(line):
         return path in re.findall(r"`([^`]+)`", line)
     return any(match.group(1) == path for pattern in _TUTORIAL_FILE_INSTRUCTIONS if (match := pattern.search(line)))
+
+
+def _is_path_like(token: str, root: Path | None) -> bool:
+    normalized = token.replace("\\", "/")
+    if (not normalized or normalized.casefold() in _NOISE_PATHS
+            or "://" in normalized or any(char.isspace() or char in "*<>{}" for char in normalized)):
+        return False
+    if "/" not in normalized:
+        # Preserve the existing explicit .py filename grammar.
+        return normalized.lower().endswith(".py") and normalized.lower() != ".py"
+    first = normalized.split("/", 1)[0]
+    return bool(
+        _PATH_EXTENSION.search(normalized.rstrip("/"))
+        or normalized.endswith("/")
+        or (root is not None and (root / first).is_dir())
+    )
+
+
+def _sentence_has_environment_context(line: str, start: int, end: int) -> bool:
+    left = max(line.rfind(mark, 0, start) for mark in ".!?") + 1
+    right_candidates = [line.find(mark, end) for mark in ".!?" if line.find(mark, end) >= 0]
+    right = min(right_candidates) if right_candidates else len(line)
+    sentence = line[left:right]
+    return bool(re.search(r"\b(?:environment\s+variable|env\s+var)\b|\benv\s*:", sentence, re.I))
 
 
 def _expected(kind: ClaimType, match: re.Match[str]) -> object:
@@ -93,7 +119,7 @@ def _expected(kind: ClaimType, match: re.Match[str]) -> object:
     return {}
 
 
-def extract_markdown(text: str, document_path: str) -> list[Claim]:
+def extract_markdown(text: str, document_path: str, root: Path | None = None) -> list[Claim]:
     """Extract only documented supported patterns, excluding fenced blocks."""
     claims: list[Claim] = []
     fenced = False
@@ -138,6 +164,8 @@ def extract_markdown(text: str, document_path: str) -> list[Claim]:
                 table_separator_pending = False
             elif table_separator_pending:
                 table_header = None
+            elif not table_header:
+                continue
             elif len(cells) == len(table_header):
                 first = _TABLE_IDENTIFIER.fullmatch(cells[0])
                 default_value = cells[table_header.index("default")].strip("` ")
@@ -160,8 +188,8 @@ def extract_markdown(text: str, document_path: str) -> list[Claim]:
 
         if "|" in line:
             header_cells = [cell.strip().casefold() for cell in cells]
-            if "default" in header_cells and len(header_cells) >= 2:
-                table_header = header_cells
+            if len(header_cells) >= 2:
+                table_header = header_cells if "default" in header_cells else []
                 table_separator_pending = True
 
         for kind, pattern in _PATTERNS:
@@ -174,8 +202,12 @@ def extract_markdown(text: str, document_path: str) -> list[Claim]:
                 # Environment tokens are case-sensitive and all caps; ignore unrelated inline code.
                 if kind is ClaimType.ENV_VAR and not re.fullmatch(r"[A-Z][A-Z0-9_]*", subject):
                     continue
+                if kind is ClaimType.ENV_VAR and "_" not in subject and not _sentence_has_environment_context(line, match.start(), match.end()):
+                    continue
                 if kind is ClaimType.FILE_PATH:
                     subject = subject.replace("\\", "/")
+                    if not _is_path_like(subject, root):
+                        continue
                     if _is_tutorial_file_instruction(line, match.group(1)):
                         continue
                 expected = _expected(kind, match)
@@ -185,6 +217,12 @@ def extract_markdown(text: str, document_path: str) -> list[Claim]:
         for match in _INLINE_DEFAULT.finditer(line):
             raw_value = (match.group(2) or match.group(3) or "").strip()
             value = raw_value.strip("` ")
+            span_end = match.end()
+            if match.group(3) and re.fullmatch(r"-?\d+", value):
+                suffix = re.match(r",\d{3}(?:,\d{3})*(?!\d)", line[span_end:])
+                if suffix:
+                    value += suffix.group(0)
+                    span_end += len(suffix.group(0))
             unit_match = _UNIT_VALUE.fullmatch(value)
             expected = {"value": unit_match.group(1).strip("`") if unit_match else value}
             if unit_match:
@@ -192,7 +230,7 @@ def extract_markdown(text: str, document_path: str) -> list[Claim]:
             elif not _LITERAL.fullmatch(raw_value):
                 expected["ambiguous"] = True
             add_claim(ClaimType.DEFAULT, match.group(1), expected, line, line_no,
-                      match.start(), match.end(), match.group(0))
+                      match.start(), span_end, match.group(0))
 
         for match in _CALL_SIGNATURE.finditer(line):
             for parameter in match.group(2).split(","):
@@ -225,7 +263,7 @@ def extract_documents(paths: Iterable[Path], root: Path) -> list[Claim]:
     for path in sorted(paths):
         try:
             relative = path.relative_to(root).as_posix()
-            claims.extend(extract_markdown(path.read_text(encoding="utf-8"), relative))
+            claims.extend(extract_markdown(path.read_text(encoding="utf-8"), relative, root))
         except (OSError, UnicodeError):
             continue
     return claims

@@ -2,12 +2,13 @@
 
 from __future__ import annotations
 
+import os
 from collections import defaultdict
 from pathlib import Path
 
 from .checkers import check_claim
 from .extract import extract_documents
-from .index import CodeIndex, build_index
+from .index import CodeIndex, _excluded_directory, build_index
 from .models import AnalysisError, Claim, ClaimType, Finding
 
 
@@ -20,7 +21,14 @@ def discover_markdown(root: Path, docs_dirs: tuple[str, ...]) -> list[Path]:
         if base.is_file() and base.suffix.lower() in {".md", ".markdown"}:
             paths.append(base)
         elif base.is_dir():
-            paths.extend(p for p in base.rglob("*") if p.is_file() and p.suffix.lower() in {".md", ".markdown"} and not any(part in {".git", ".venv", "node_modules"} for part in p.parts))
+            for current, directories, files in os.walk(base):
+                current_path = Path(current)
+                directories[:] = sorted(name for name in directories if not _excluded_directory(name))
+                paths.extend(
+                    current_path / name
+                    for name in files
+                    if Path(name).suffix.lower() in {".md", ".markdown"}
+                )
     return sorted(set(paths))
 
 
@@ -30,6 +38,23 @@ def build_impact_index(claims: list[Claim]) -> dict[str, tuple[str, ...]]:
     for claim in claims:
         result[claim.subject].append(claim.id)
     return {key: tuple(sorted(set(value))) for key, value in sorted(result.items())}
+
+
+def _record_scanned_scope_paths(root: Path, scopes: tuple[str, ...], index: CodeIndex) -> None:
+    for scope in scopes:
+        base = (root / scope).resolve()
+        if not base.is_relative_to(root) or not base.exists():
+            continue
+        if base.is_file():
+            index.scanned_paths.add(base.relative_to(root).as_posix())
+            continue
+        for current, directories, files in os.walk(base):
+            current_path = Path(current)
+            index.scanned_paths.add(current_path.relative_to(root).as_posix())
+            directories[:] = sorted(name for name in directories if not _excluded_directory(name))
+            index.scanned_paths.update(
+                (current_path / name).relative_to(root).as_posix() for name in files
+            )
 
 
 def select_impacted_claims(
@@ -110,6 +135,15 @@ def analyze(
     root = root.resolve()
     claims = extract_documents(discover_markdown(root, docs_dirs), root)
     index = build_index(root, source_dirs)
+    _record_scanned_scope_paths(root, docs_dirs, index)
+    for claim in claims:
+        document = root / claim.document_path
+        current = document
+        while current.is_relative_to(root):
+            index.scanned_paths.add(current.relative_to(root).as_posix())
+            if current == root:
+                break
+            current = current.parent
     for scope in docs_dirs:
         candidate = (root / scope).resolve()
         if not candidate.is_relative_to(root) or not candidate.exists():

@@ -50,6 +50,11 @@ def check_function(claim: Claim, index: CodeIndex) -> Finding:
 
 def _normal_literal(value: object) -> tuple[bool, object]:
     text = str(value).strip()
+    if re.fullmatch(r"-?\d{1,3}(?:,\d{3})+", text):
+        try:
+            return True, int(text.replace(",", ""))
+        except ValueError:
+            return False, None
     if text.startswith(("'", '"')) and text[-1:] == text[:1]:
         try:
             return True, ast.literal_eval(text)
@@ -77,6 +82,31 @@ def check_default(claim: Claim, index: CodeIndex) -> Finding:
     ok, expected = _normal_literal(expected_raw)
     if not ok:
         return _finding(claim, Verdict.UNVERIFIABLE, "Documented default cannot be normalized safely." + unit_note)
+    env_default_subject = re.fullmatch(r"(?=[A-Z0-9_]*_)(?=.*[A-Z])[A-Z0-9_]+", claim.subject)
+    is_backticked_subject = f"`{claim.subject}`" in claim.text
+    if env_default_subject and is_backticked_subject:
+        reads = index.environment_defaults.get(claim.subject, [])
+        if not reads:
+            return _finding(claim, Verdict.UNVERIFIABLE,
+                            "No recognized environment-variable read with a default was found." + unit_note)
+        if len(reads) != 1 or not reads[0].has_default or not reads[0].default_resolved:
+            return _finding(claim, Verdict.UNVERIFIABLE,
+                            "Environment-variable default is absent, non-literal, or ambiguous." + unit_note)
+        read = reads[0]
+        evidence = index.evidence(read.path, read.line)
+        ev = (evidence,) if evidence else ()
+        actual = read.default
+        equivalent = actual == expected and type(actual) is type(expected)
+        if isinstance(actual, str) and isinstance(expected, (int, float)):
+            parsed, numeric_actual = _normal_literal(actual)
+            equivalent = parsed and type(numeric_actual) is type(expected) and numeric_actual == expected
+        if equivalent:
+            return _finding(claim, Verdict.TRUE,
+                            f"Environment-variable default for {claim.subject} matches." + unit_note, ev,
+                            "static_environment_default")
+        return _finding(claim, Verdict.FALSE,
+                        f"Documented default {expected!r} differs from environment-variable default {actual!r}." + unit_note,
+                        ev, "static_environment_default")
     qualified_function = claim.expected.get("function")
     if qualified_function is not None:
         functions = index.functions.get(str(qualified_function), [])
@@ -168,25 +198,59 @@ def check_env(claim: Claim, index: CodeIndex) -> Finding:
 
 def check_path(claim: Claim, index: CodeIndex) -> Finding:
     candidate = PurePosixPath(claim.subject)
-    if candidate.is_absolute() or ".." in candidate.parts:
-        return _finding(claim, Verdict.UNVERIFIABLE, "Repository path is absolute or traverses outside the repository.", method="repository_path")
-    resolved = (index.root / claim.subject).resolve()
-    if not resolved.is_relative_to(index.root):
-        return _finding(claim, Verdict.UNVERIFIABLE, "Resolved path escapes the repository root.", method="repository_path")
-    if not resolved.is_file():
-        return _finding(claim, Verdict.FALSE, "Referenced repository file does not exist.", method="repository_path")
-    ev: tuple[Evidence, ...]
-    try:
-        line = resolved.read_text(encoding="utf-8").splitlines()[0].strip()
-        ev = (Evidence(resolved.relative_to(index.root).as_posix(), 1, line),) if line else (Evidence(resolved.relative_to(index.root).as_posix(), 1, ""),)
-    except (OSError, UnicodeError):
-        ev = ()
-    return _finding(claim, Verdict.TRUE, "Referenced repository file exists.", ev, "repository_path")
+    if candidate.is_absolute():
+        return _finding(claim, Verdict.UNVERIFIABLE, "Repository path is absolute.", method="repository_path")
+    # Relative parent references are allowed only when they resolve inside the
+    # repository; unresolved traversal remains unverifiable below.
+    traversal = ".." in candidate.parts
+
+    document_parent = (index.root / PurePosixPath(claim.document_path)).parent
+    bases: list[Path] = [index.root]
+    current = document_parent
+    while current.is_relative_to(index.root):
+        if current not in bases:
+            bases.append(current)
+        if current == index.root:
+            break
+        current = current.parent
+    for base in bases:
+        resolved = (base / str(candidate)).resolve()
+        if not resolved.is_relative_to(index.root):
+            continue
+        if resolved.is_file() or resolved.is_dir():
+            if resolved.is_dir():
+                return _finding(claim, Verdict.TRUE, "Referenced repository directory exists.", method="repository_path")
+            try:
+                line = resolved.read_text(encoding="utf-8").splitlines()[0].strip()
+                ev = (Evidence(resolved.relative_to(index.root).as_posix(), 1, line),) if line else (Evidence(resolved.relative_to(index.root).as_posix(), 1, ""),)
+            except (OSError, UnicodeError):
+                ev = ()
+            return _finding(claim, Verdict.TRUE, "Referenced repository file exists.", ev, "repository_path")
+
+    suffix = str(candidate).replace("\\", "/").rstrip("/")
+    matches = sorted(path for path in index.scanned_paths if path == suffix or path.endswith("/" + suffix))
+    if len(matches) == 1:
+        return _finding(claim, Verdict.UNVERIFIABLE,
+                        "Path resolves only relative to another directory.", method="repository_path")
+    if traversal:
+        return _finding(claim, Verdict.UNVERIFIABLE,
+                        "Relative path does not resolve within the repository.", method="repository_path")
+    return _finding(claim, Verdict.FALSE, "Referenced repository path does not exist.", method="repository_path")
 
 
 def check_python_version(claim: Claim, index: CodeIndex) -> Finding:
-    metadata = index.root / "pyproject.toml"
-    if not metadata.is_file():
+    document_parent = (index.root / PurePosixPath(claim.document_path)).parent
+    metadata: Path | None = None
+    current = document_parent
+    while current.is_relative_to(index.root):
+        candidate = current / "pyproject.toml"
+        if candidate.is_file():
+            metadata = candidate
+            break
+        if current == index.root:
+            break
+        current = current.parent
+    if metadata is None:
         return _finding(claim, Verdict.UNVERIFIABLE, "No pyproject.toml metadata is available.", method="python_metadata")
     text = metadata.read_text(encoding="utf-8")
     match = re.search(r"(?m)^requires-python\s*=\s*[\"']([^\"']+)[\"']", text)
@@ -200,9 +264,10 @@ def check_python_version(claim: Claim, index: CodeIndex) -> Finding:
         return _finding(claim, Verdict.UNVERIFIABLE, f"Metadata requirement {req!r} is outside the supported comparison grammar.", method="python_metadata")
     actual = (int(requirement.group(1)), int(requirement.group(2)))
     source_line = text[:match.start()].count("\n") + 1
+    metadata_path = metadata.relative_to(index.root).as_posix()
     return _finding(claim, Verdict.TRUE if documented == actual else Verdict.FALSE,
                     f"Documentation requires {documented}; project metadata declares {actual}.",
-                    (Evidence("pyproject.toml", source_line, match.group(0)),), "python_metadata")
+                    (Evidence(metadata_path, source_line, match.group(0)),), "python_metadata")
 
 
 REGISTRY: dict[ClaimType, Checker] = {

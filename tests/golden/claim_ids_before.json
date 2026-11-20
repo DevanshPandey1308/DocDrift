@@ -8,6 +8,26 @@
     "b30bf67dfdef6868",
     "0f9374d045f68c4c"
   ],
+  "tests/fixtures/natural_phrasing_clean_repo": [
+    "3507a659f41e124f",
+    "73abc40aa1d741fe",
+    "f55428f0de65b7c8",
+    "ba3216539aeca167",
+    "a5b486200ceb4f70",
+    "4f4ddc9cc3f91fbc",
+    "56ecb80e548188b5",
+    "4b781e90ef6f23c5"
+  ],
+  "tests/fixtures/natural_phrasing_repo": [
+    "3507a659f41e124f",
+    "73abc40aa1d741fe",
+    "f55428f0de65b7c8",
+    "ba3216539aeca167",
+    "a5b486200ceb4f70",
+    "4f4ddc9cc3f91fbc",
+    "56ecb80e548188b5",
+    "4b781e90ef6f23c5"
+  ],
   "tests/fixtures/route_cli_repo": [
     "0de07b0956668bc7",
     "cb1d66bc59c259d3",

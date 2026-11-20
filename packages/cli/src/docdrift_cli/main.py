@@ -45,7 +45,10 @@ def main(argv: list[str] | None = None) -> int:
             print("No supported claims found.")
         for finding in findings:
             claim = finding.claim
-            print(f"{finding.verdict.value.upper()} {claim.document_path}:{claim.line} [{claim.type.value}] {claim.text.strip()}")
+            matched = claim.text[claim.span_start:claim.span_end].strip()
+            if len(matched) > 160:
+                matched = matched[:157] + "..."
+            print(f"{finding.verdict.value.upper()} {claim.document_path}:{claim.line} [{claim.type.value}] {matched}")
             print(f"  {finding.explanation}")
             for evidence in finding.evidence:
                 print(f"  source {evidence.path}:{evidence.line}: {evidence.snippet}")

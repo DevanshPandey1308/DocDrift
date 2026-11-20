@@ -3,13 +3,18 @@
 from __future__ import annotations
 
 import ast
+import os
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
 
 from .models import AnalysisError, Evidence
 
-EXCLUDED = {".git", ".venv", "venv", "__pycache__", "node_modules", "dist", "build", ".mypy_cache", ".pytest_cache"}
+EXCLUDED = {"venv", ".venv", "__pycache__", "node_modules", "site-packages", "dist", "build"}
+
+
+def _excluded_directory(name: str) -> bool:
+    return name.startswith(".") or name in EXCLUDED
 
 
 @dataclass(frozen=True, slots=True)
@@ -28,6 +33,16 @@ class FunctionInfo:
     line: int
     parameters: tuple[Parameter, ...]
     signature: str
+
+
+@dataclass(frozen=True, slots=True)
+class EnvironmentDefaultInfo:
+    name: str
+    path: str
+    line: int
+    has_default: bool
+    default_resolved: bool
+    default: Any = None
 
 
 @dataclass(frozen=True, slots=True)
@@ -57,6 +72,8 @@ class CodeIndex:
     routes: dict[str, list[RouteInfo]] = field(default_factory=dict)
     routes_complete: bool = True
     environment: dict[str, list[Evidence]] = field(default_factory=dict)
+    environment_defaults: dict[str, list[EnvironmentDefaultInfo]] = field(default_factory=dict)
+    scanned_paths: set[str] = field(default_factory=set)
     errors: list[AnalysisError] = field(default_factory=list)
 
     def evidence(self, path: str, line: int) -> Evidence | None:
@@ -211,6 +228,12 @@ class _Visitor(ast.NodeVisitor):
                 is_literal, value = _literal(node.args[0])
                 if is_literal and isinstance(value, str):
                     self.index.environment.setdefault(value, []).append(Evidence(self.rel, node.lineno, ""))
+                    has_default = len(node.args) >= 2
+                    resolved, default = _literal(node.args[1]) if has_default else (False, None)
+                    self.index.environment_defaults.setdefault(value, []).append(
+                        EnvironmentDefaultInfo(value, self.rel, node.lineno,
+                                               has_default, resolved, default)
+                    )
         self.generic_visit(node)
 
     def _index_flag_call(self, node: ast.Call) -> None:
@@ -282,7 +305,20 @@ def build_index(root: Path, source_dirs: tuple[str, ...] = (".",)) -> CodeIndex:
         if not base.is_relative_to(root) or not base.exists():
             index.errors.append(AnalysisError(configured, "source scope is missing or escapes repository", kind="configuration_error"))
             continue
-        candidates = [base] if base.is_file() else [p for p in base.rglob("*.py") if not any(part in EXCLUDED for part in p.parts)]
+        if base.is_file():
+            candidates = [base]
+            index.scanned_paths.add(base.relative_to(root).as_posix())
+        else:
+            candidates = []
+            for current, directories, files in os.walk(base):
+                current_path = Path(current)
+                index.scanned_paths.add(current_path.relative_to(root).as_posix())
+                directories[:] = sorted(name for name in directories if not _excluded_directory(name))
+                for name in files:
+                    path = current_path / name
+                    index.scanned_paths.add(path.relative_to(root).as_posix())
+                    if path.suffix == ".py":
+                        candidates.append(path)
         for path in sorted(candidates):
             if path.suffix != ".py":
                 continue
