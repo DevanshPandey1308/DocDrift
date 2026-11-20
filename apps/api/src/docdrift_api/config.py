@@ -4,12 +4,69 @@ from __future__ import annotations
 
 import math
 import os
+import re
 from dataclasses import dataclass, field
+from pathlib import Path
 from urllib.parse import urlsplit
 
 DEFAULT_TITLE = "DocDrift API"
 DEFAULT_VERSION = "0.1.0"
 MAX_LLM_RUN_TOKEN_BUDGET = 100_000
+
+
+def _normalize_github_app_private_key(value: str | None) -> str | None:
+    """Normalize supported GitHub App PEM environment/file representations."""
+    if value is None or not value.strip():
+        return None
+    normalized = value.strip()
+    if (
+        len(normalized) >= 2
+        and normalized[0] == normalized[-1]
+        and normalized[0] in {"'", '"'}
+    ):
+        normalized = normalized[1:-1].strip()
+    normalized = normalized.replace("\\n", "\n").replace("\r\n", "\n").replace("\r", "\n")
+    normalized = normalized.strip()
+
+    if "\n" not in normalized:
+        match = re.fullmatch(
+            r"(?P<header>-----BEGIN (?P<kind>RSA PRIVATE KEY|PRIVATE KEY)-----)"
+            r"\s*(?P<body>.*?)\s*"
+            r"-----END (?P=kind)-----",
+            normalized,
+            flags=re.DOTALL,
+        )
+        if match is not None:
+            body = re.sub(r"\s+", "", match.group("body"))
+            wrapped_body = "\n".join(
+                body[offset : offset + 64] for offset in range(0, len(body), 64)
+            )
+            normalized = (
+                f"{match.group('header')}\n{wrapped_body}\n"
+                f"-----END {match.group('kind')}-----\n"
+            )
+    return normalized
+
+
+def _github_app_private_key_from_env() -> str | None:
+    """Load the PEM from the configured path or inline environment variable."""
+    path_value = os.getenv("DOCDRIFT_GITHUB_APP_PRIVATE_KEY_PATH")
+    if path_value and path_value.strip():
+        try:
+            contents = Path(path_value.strip()).expanduser().read_text(encoding="utf-8")
+        except (OSError, UnicodeError):
+            raise ValueError(
+                "DOCDRIFT_GITHUB_APP_PRIVATE_KEY_PATH could not be read as UTF-8."
+            ) from None
+        key = _normalize_github_app_private_key(contents)
+        if key is None:
+            raise ValueError(
+                "DOCDRIFT_GITHUB_APP_PRIVATE_KEY_PATH contains no private key data."
+            )
+        return key
+    return _normalize_github_app_private_key(
+        os.getenv("DOCDRIFT_GITHUB_APP_PRIVATE_KEY")
+    )
 
 
 @dataclass(frozen=True)
@@ -69,7 +126,7 @@ class Settings:
         """Build settings from supported environment variables."""
         webhook_secret = os.getenv("DOCDRIFT_GITHUB_WEBHOOK_SECRET")
         app_id = os.getenv("DOCDRIFT_GITHUB_APP_ID")
-        app_private_key = os.getenv("DOCDRIFT_GITHUB_APP_PRIVATE_KEY")
+        app_private_key = _github_app_private_key_from_env()
         database_url = os.getenv("DOCDRIFT_DATABASE_URL")
         redis_url = os.getenv("DOCDRIFT_REDIS_URL")
         llm_enabled = os.getenv("DOCDRIFT_LLM_ENABLED", "false").strip().lower() in {"1", "true", "yes"}
@@ -88,11 +145,7 @@ class Settings:
             if webhook_secret and webhook_secret.strip()
             else None,
             github_app_id=app_id.strip() if app_id and app_id.strip() else None,
-            github_app_private_key=(
-                app_private_key.replace("\\n", "\n")
-                if app_private_key and app_private_key.strip()
-                else None
-            ),
+            github_app_private_key=app_private_key,
             database_url=database_url.strip() if database_url and database_url.strip() else None,
             redis_url=redis_url.strip() if redis_url and redis_url.strip() else None,
             llm_enabled=llm_enabled,

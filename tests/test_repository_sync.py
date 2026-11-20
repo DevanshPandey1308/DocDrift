@@ -90,8 +90,8 @@ class GitHubAppJWTConfigurationTests(unittest.TestCase):
             {**common, "DOCDRIFT_GITHUB_APP_PRIVATE_KEY": pem.replace("\n", "\\n")},
         ):
             escaped_newline = Settings.from_env().github_app_private_key
-        self.assertEqual(actual_newline, pem)
-        self.assertEqual(escaped_newline, pem)
+        self.assertEqual(actual_newline, pem.strip())
+        self.assertEqual(escaped_newline, pem.strip())
 
 
 class GitHubInstallationClientTests(unittest.IsolatedAsyncioTestCase):

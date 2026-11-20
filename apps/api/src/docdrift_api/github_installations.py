@@ -104,10 +104,30 @@ class GitHubInstallationClient:
                 diagnostic_code="unsupported_private_key_algorithm",
             ) from error
         except (TypeError, ValueError) as error:
+            has_header = any(
+                marker in self.private_key
+                for marker in (
+                    "-----BEGIN RSA PRIVATE KEY-----",
+                    "-----BEGIN PRIVATE KEY-----",
+                )
+            )
+            has_footer = any(
+                marker in self.private_key
+                for marker in (
+                    "-----END RSA PRIVATE KEY-----",
+                    "-----END PRIVATE KEY-----",
+                )
+            )
+            structural_hints = (
+                f"pem_lines={max(1, len(self.private_key.splitlines()))};"
+                f"pem_header_present={str(has_header).lower()};"
+                f"pem_footer_present={str(has_footer).lower()}"
+            )
             raise GitHubInstallationSyncError(
                 "GitHub App private key is malformed, encrypted, or not PEM encoded.",
                 operation="app_authentication",
                 diagnostic_code="invalid_private_key_format",
+                upstream_detail=structural_hints,
             ) from error
         if not isinstance(private_key, rsa.RSAPrivateKey):
             raise GitHubInstallationSyncError(
