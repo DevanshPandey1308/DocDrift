@@ -17,7 +17,7 @@ The API must be running at `http://localhost:8000` for OpenAPI generation and da
 
 ## Run the API and sign in
 
-Follow the API setup in the repository README. Configure `DOCDRIFT_GITHUB_OAUTH_CLIENT_ID`, `DOCDRIFT_GITHUB_OAUTH_CLIENT_SECRET`, `DOCDRIFT_SESSION_ENCRYPTION_KEY`, and `DOCDRIFT_GITHUB_OAUTH_REDIRECT_URI`. Register the exact callback URL, normally `http://localhost:8000/auth/github/callback` for local HTTP, and set `DOCDRIFT_DASHBOARD_COOKIE_SECURE=false` only for local HTTP development. The user must have access to the repository, and that repository must also be attached to a DocDrift GitHub App installation. The API performs a live GitHub repository access check before listing or returning repository data. Local UI tests do not perform OAuth or contact GitHub.
+Follow the API setup in the repository README. Configure the OAuth application's `DOCDRIFT_GITHUB_OAUTH_CLIENT_ID`, `DOCDRIFT_GITHUB_OAUTH_CLIENT_SECRET`, `DOCDRIFT_SESSION_ENCRYPTION_KEY`, and `DOCDRIFT_GITHUB_OAUTH_REDIRECT_URI`, plus the separate GitHub App's `DOCDRIFT_GITHUB_APP_ID` and `DOCDRIFT_GITHUB_APP_PRIVATE_KEY`. The OAuth session token is used to list repositories visible to the signed-in user. A server-generated GitHub App JWT lists current App installations and creates installation tokens to check their repository inventories; credentials stay server-side. Register the exact callback URL, normally `http://localhost:8000/auth/github/callback` for local HTTP, and set `DOCDRIFT_DASHBOARD_COOKIE_SECURE=false` only for local HTTP development. The API intersects both live GitHub views with persisted repository associations before listing repositories. Local UI tests do not perform OAuth or contact GitHub.
 
 Start the API from the repository root in its configured environment, including `DOCDRIFT_DASHBOARD_ORIGIN=http://localhost:5173`:
 
@@ -31,7 +31,7 @@ The unauthenticated dashboard displays a GitHub sign-in action that redirects to
 
 Generated TypeScript types are derived from the live FastAPI OpenAPI document. With the API running, `npm run typegen` updates `src/api/schema.d.ts` using `openapi-typescript`. The frontend uses these generated route types through `openapi-fetch` and Zod-validates the responses at runtime.
 
-The dashboard read API adds `GET /auth/session`, `GET /repositories`, `GET /repositories/{repository_id}/runs`, and `GET /runs/{run_id}`. Repository reads require a valid OAuth session and are re-authorized against GitHub. Existing feedback endpoints remain the only write routes.
+The dashboard API includes `GET /auth/session`, `GET /repositories`, `POST /repositories/sync`, `GET /repositories/{repository_id}/runs`, and `GET /runs/{run_id}`. Repository reads require a valid OAuth session and confirm access against GitHub. Sync requires the session's `docdrift_csrf` cookie in `X-CSRF-Token`. It lists the user's visible repositories with the OAuth token, discovers current App installations with an App JWT, and retrieves each relevant inventory with short-lived App installation tokens. The browser cannot submit an installation ID. A successful sync invalidates the repository list; API failures stay visible as errors. This flow uses the current schema and adds no migration. Existing feedback endpoints remain available for writes.
 
 ## Development and checks
 

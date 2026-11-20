@@ -183,11 +183,12 @@ class AnthropicDocDriftProvider:
         try:
             value = _strict_json(text)
         except (json.JSONDecodeError, ValueError):
-            return FixCandidateResponse(None, input_tokens, output_tokens)
-        replacement: str | None = None
-        if isinstance(value, Mapping) and set(value) == {"replacement"}:
-            candidate = value["replacement"]
-            replacement = candidate if isinstance(candidate, str) else None
+            return None
+        if not isinstance(value, Mapping) or set(value) != {"replacement"}:
+            return None
+        replacement = value["replacement"]
+        if not isinstance(replacement, str):
+            return None
         return FixCandidateResponse(replacement, input_tokens, output_tokens)
 
 

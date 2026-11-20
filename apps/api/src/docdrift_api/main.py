@@ -5,6 +5,7 @@ from __future__ import annotations
 from collections.abc import AsyncIterator
 from contextlib import asynccontextmanager
 
+import httpx
 from arq.connections import ArqRedis
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
@@ -58,6 +59,7 @@ def create_app(
         allow_headers=["Content-Type", "X-CSRF-Token"],
     )
     application.state.settings = app_settings
+    application.state.github_http_client_factory = httpx.AsyncClient
     application.state.session_factory = session_factory
     application.state.redis_pool = redis_pool
     application.include_router(create_health_router(app_settings))

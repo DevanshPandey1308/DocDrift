@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import hashlib
 import hmac
+import logging
 import re
 import secrets
 import time
@@ -17,25 +18,30 @@ from fastapi import APIRouter, Depends, Header, HTTPException, Query, Request, R
 from fastapi.responses import RedirectResponse
 from pydantic import BaseModel, ConfigDict, Field
 from sqlalchemy import func, select
+from sqlalchemy.exc import SQLAlchemyError
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
 from .config import Settings
 from .feedback import FeedbackIdempotencyConflict, record_feedback
+from .github_installations import GitHubInstallationClient, GitHubInstallationSyncError
 from .models import (
     AnalysisFinding,
     DashboardSession,
     FeedbackCategory,
     FeedbackEvent,
+    Installation,
     PublishedSuggestion,
     Repository,
     Run,
 )
+from .repository_sync import RepositorySyncConflict, persist_repository_sync
 
 SESSION_COOKIE = "docdrift_session"
 CSRF_COOKIE = "docdrift_csrf"
 SESSION_TTL = timedelta(hours=8)
 MAX_PAGE_SIZE = 100
 _REPOSITORY_NAME = re.compile(r"^[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+$")
+logger = logging.getLogger(__name__)
 
 
 class FeedbackRequest(BaseModel):
@@ -80,6 +86,11 @@ class SessionResponse(BaseModel):
 class RepositoryResponse(BaseModel):
     id: int
     full_name: str
+
+
+class RepositorySyncResponse(BaseModel):
+    synced_installations: int
+    synced_repositories: int
 
 
 class RunListItem(BaseModel):
@@ -280,28 +291,116 @@ def create_dashboard_router(settings: Settings) -> APIRouter:
         factory = request.app.state.session_factory
         if factory is None:
             raise HTTPException(503, "Database is unavailable.")
+        github_client = GitHubInstallationClient(
+            settings.github_app_id,
+            settings.github_app_private_key,
+            client_factory=request.app.state.github_http_client_factory,
+        )
+        try:
+            authorized_installations = await github_client.synchronize(token)
+        except GitHubInstallationSyncError as error:
+            logger.warning(
+                "dashboard_repository_authorization_failed operation=%s upstream_status=%s upstream_detail=%s diagnostic_code=%s",
+                error.operation,
+                error.status_code,
+                error.upstream_detail,
+                error.diagnostic_code,
+                extra={
+                    "operation": error.operation,
+                    "upstream_status": error.status_code,
+                    "upstream_detail": error.upstream_detail,
+                    "diagnostic_code": error.diagnostic_code,
+                },
+            )
+            raise HTTPException(
+                503,
+                "GitHub repository access could not be checked. Verify the OAuth session and App configuration, then retry.",
+            ) from None
+        if not authorized_installations:
+            return []
+        authorized_installation_ids = tuple(
+            installation.github_installation_id for installation in authorized_installations
+        )
+        authorized_repositories_by_id = {
+            repository.github_repository_id: repository
+            for installation in authorized_installations
+            for repository in installation.repositories
+        }
         async with factory() as session:
             rows = await session.scalars(
                 select(Repository)
+                .join(Installation, Repository.installation_id == Installation.id)
                 .where(
                     Repository.github_repository_id.is_not(None),
                     Repository.installation_id.is_not(None),
+                    Repository.github_repository_id.in_(authorized_repositories_by_id),
+                    Installation.github_installation_id.in_(authorized_installation_ids),
                 )
                 .order_by(Repository.full_name, Repository.id)
             )
             candidates = list(rows)
-        # The installation inventory alone is insufficient for dashboard authorization.
-        # Reuse the existing live OAuth-user check before returning each repository.
-        authorized: list[RepositoryResponse] = []
-        for candidate in candidates:
-            try:
-                repo = await _authorized_repository(request, candidate.id, token)
-            except HTTPException as error:
-                if error.status_code == 404:
-                    continue
-                raise
-            authorized.append(RepositoryResponse(id=repo.id, full_name=repo.full_name))
-        return authorized
+        # Intersect the current app installation inventory with the live OAuth-user
+        # repository list, then return only repositories present in both sources.
+        return [
+            RepositoryResponse(
+                id=candidate.id,
+                full_name=authorized_repositories_by_id[candidate.github_repository_id].full_name,
+            )
+            for candidate in candidates
+            if candidate.github_repository_id in authorized_repositories_by_id
+        ]
+
+    @router.post(
+        "/repositories/sync",
+        response_model=RepositorySyncResponse,
+        tags=["dashboard"],
+    )
+    async def synchronize_repositories(
+        request: Request,
+        authenticated: Annotated[tuple[DashboardSession, str], Depends(_get_session)],
+        _: Annotated[None, Depends(_csrf)],
+    ) -> RepositorySyncResponse:
+        """Sync installations the current OAuth user is authorized to access."""
+        oauth_token = authenticated[1]
+        session_factory = request.app.state.session_factory
+        if session_factory is None:
+            raise HTTPException(503, "Repository synchronization is unavailable.")
+        try:
+            client = GitHubInstallationClient(
+                settings.github_app_id,
+                settings.github_app_private_key,
+                client_factory=request.app.state.github_http_client_factory,
+            )
+            installation_data = await client.synchronize(oauth_token)
+            repository_count = await persist_repository_sync(
+                session_factory, installation_data
+            )
+        except GitHubInstallationSyncError as error:
+            logger.warning(
+                "dashboard_repository_sync_github_failed operation=%s upstream_status=%s",
+                error.operation,
+                error.status_code,
+                extra={
+                    "operation": error.operation,
+                    "upstream_status": error.status_code,
+                },
+            )
+            raise HTTPException(
+                503, "Repository synchronization failed. Please retry."
+            ) from None
+        except (RepositorySyncConflict, SQLAlchemyError) as error:
+            logger.error(
+                "dashboard_repository_sync_persistence_failed error_type=%s",
+                type(error).__name__,
+                extra={"error_type": type(error).__name__},
+            )
+            raise HTTPException(
+                503, "Repository synchronization failed. Please retry."
+            ) from None
+        return RepositorySyncResponse(
+            synced_installations=len(installation_data),
+            synced_repositories=repository_count,
+        )
 
     @router.get(
         "/repositories/{repository_id}/runs",

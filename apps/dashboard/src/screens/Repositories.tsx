@@ -1,14 +1,30 @@
-import { useQuery } from "@tanstack/react-query";
+import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { Link, useParams } from "react-router-dom";
-import { getRepositories, getRuns } from "../api/client";
-import { Breadcrumbs, EmptyState, ErrorPanel, LoadingState, PageHeader, StatusBadge } from "../components/ui";
+import { getRepositories, getRuns, syncRepositories } from "../api/client";
+import { Breadcrumbs, Button, EmptyState, ErrorPanel, FeedbackMessage, LoadingState, PageHeader, StatusBadge } from "../components/ui";
 import { formatDate } from "../utils/date";
 
 export function Repositories() {
+  const queryClient = useQueryClient();
   const repositories = useQuery({ queryKey: ["repositories"], queryFn: getRepositories });
+  const sync = useMutation({
+    mutationFn: syncRepositories,
+    onSuccess: async () => queryClient.invalidateQueries({ queryKey: ["repositories"] }),
+  });
+  const resultMessage = sync.data
+    ? sync.data.synced_installations === 0
+      ? "No DocDrift installations are available to this GitHub account."
+      : `Synchronization complete: ${sync.data.synced_repositories} repositories available to the DocDrift installation.`
+    : undefined;
   return (
     <>
       <PageHeader eyebrow="Your workspace" title="Repositories" description="Repositories authorized for your GitHub account and the DocDrift installation." />
+      <div className="repository-sync-action">
+        <Button variant="primary" disabled={sync.isPending} onClick={() => sync.mutate()}>
+          {sync.isPending ? "Synchronizing…" : "Sync repositories"}
+        </Button>
+      </div>
+      <FeedbackMessage success={resultMessage} error={sync.isError ? sync.error.message : undefined} />
       {repositories.isPending ? <LoadingState label="Loading repositories…" />
         : repositories.isError ? <ErrorPanel error={repositories.error} />
           : repositories.data.length ? (

@@ -117,11 +117,27 @@ published-suggestion identities. OAuth state is time-limited and HMAC-protected;
 cookie contains a random opaque token whose hash is stored in PostgreSQL. The GitHub OAuth
 access token is encrypted at rest using `DOCDRIFT_SESSION_ENCRYPTION_KEY`. Mutating routes
 require a double-submit CSRF token checked against the stored session hash. Every private
-repository request checks the OAuth token against GitHub's repository endpoint and matches
-the trusted GitHub repository ID to a repository with an active DocDrift installation. Missing
+repository request checks the OAuth token's live repository inventory and matches the trusted
+GitHub repository ID to a repository with an active DocDrift installation. Missing
 OAuth settings fail closed. Configure the client ID, secret, encryption key, and exact callback
 URI; production uses HTTPS and secure cookies. GitHub access checks require network access and
 were not live-tested in the unit suite.
+
+`POST /repositories/sync` populates installations and repositories before the first pull-request
+webhook. It accepts no installation ID. OAuth credentials and GitHub App credentials have
+separate roles: the current session's OAuth token lists repositories visible to that user through
+`GET /user/repos`, while a server-generated App JWT lists current installations and mints
+short-lived installation tokens to fetch each installation's complete repository inventory.
+Only inventories that overlap the user's OAuth-visible repositories are synchronized. The API
+requests metadata read only, fetches every repository page, and upserts records by GitHub
+repository ID in one database transaction. Renames update `full_name`, and repositories absent
+from a successfully refreshed inventory are detached from that installation. Identity conflicts
+and GitHub/API failures fail the sync without claiming success. Repeated syncs are safe.
+`GET /repositories` intersects the live App installation inventory, the signed-in user's live
+OAuth-visible repositories, and persisted repository associations; stale records alone grant no
+dashboard access. The route uses the existing session and does not return either token or App
+credentials. This flow needs no migration; the GitHub installation and repository tables already
+provide the required identifiers.
 
 The worker writes a published-suggestion row only after GitHub returns a successful inline
 comment response for a planner-approved suggestion. The record includes the finding/run/repo,

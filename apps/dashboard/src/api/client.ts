@@ -14,6 +14,7 @@ export class ApiError extends Error {
 
 const SessionSchema = z.object({ github_login: z.string(), github_user_id: z.number(), expires_at: z.string() });
 const RepositorySchema = z.object({ id: z.number(), full_name: z.string() });
+const RepositorySyncSchema = z.object({ synced_installations: z.number(), synced_repositories: z.number() });
 const RunSchema = z.object({
   id: z.number(), repository_id: z.number(), pull_request_number: z.number(), head_sha: z.string(),
   base_sha: z.string().nullable(), status: z.string(), publication_status: z.string(),
@@ -58,6 +59,12 @@ export async function getSession() {
 }
 export async function getRepositories() {
   return z.array(RepositorySchema).parse(await unwrap(await client.GET("/repositories")));
+}
+export async function syncRepositories() {
+  const csrf = document.cookie.split(";").map((item) => item.trim()).find((item) => item.startsWith("docdrift_csrf="))?.split("=").slice(1).join("=");
+  if (!csrf) throw new ApiError(403, "Your session is missing its CSRF token. Reload and try again.");
+  const result = await client.POST("/repositories/sync", { headers: { "X-CSRF-Token": decodeURIComponent(csrf) } });
+  return RepositorySyncSchema.parse(await unwrap(result));
 }
 export async function getRuns(repositoryId: number) {
   return z.array(RunSchema).parse(await unwrap(await client.GET("/repositories/{repository_id}/runs", {

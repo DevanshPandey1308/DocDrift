@@ -7,6 +7,7 @@ export const detail = { ...run, findings: [{ id: 92, claim_id: "claim-92", claim
 export const handlers = [
   http.get(`${API}/auth/session`, () => HttpResponse.json({ github_login: "octocat", github_user_id: 123, expires_at: "2026-10-20T00:00:00Z" })),
   http.get(`${API}/repositories`, () => HttpResponse.json([repository])),
+  http.post(`${API}/repositories/sync`, () => HttpResponse.json({ synced_installations: 1, synced_repositories: 1 })),
   http.get(`${API}/repositories/:repository_id/runs`, () => HttpResponse.json([run])),
   http.get(`${API}/runs/:run_id`, () => HttpResponse.json(detail)),
   http.get(`${API}/repositories/:repository_id/feedback/metrics`, () => HttpResponse.json({ accepted_fixes: 1, rejected_fixes: 1, false_positives: 0, numerator: 1, denominator: 2, acceptance_rate: 0.5 })),

@@ -215,14 +215,25 @@ and retrieval routes are available after GitHub OAuth sign-in: `GET /auth/github
 require the `docdrift_csrf` cookie value in `X-CSRF-Token` and a JSON body such as
 `{"category":"fix_accepted","idempotency_key":"review-123","reason":"Applied"}`.
 The session cookie is HttpOnly; OAuth access tokens are encrypted at rest and repository
-access is rechecked against GitHub for each request. GitHub events still do not reliably prove
+access is rechecked against GitHub for each request. On the Repositories page, `POST /repositories/sync`
+uses the signed-in user's OAuth token to list repositories visible to that user, and a separate
+server-generated GitHub App JWT to list current installations. It mints short-lived metadata-only
+installation tokens to list inventories that overlap the user's accessible repositories.
+Installation IDs are discovered server-side; the browser cannot select one. The database upserts
+by GitHub's stable repository ID and updates renamed repository names. Dashboard results require
+both a current App installation inventory and live access for the signed-in user.
+Configure `DOCDRIFT_GITHUB_APP_ID` and `DOCDRIFT_GITHUB_APP_PRIVATE_KEY` in the API environment
+as well as the worker environment. This reuses the existing schema and requires no migration.
+Synchronization failures return an error and do not display a connected/success state; retrying
+the request is safe. The sync endpoint requires the existing session and CSRF token. GitHub events still do not reliably prove
 per-suggestion acceptance. Acceptance rate is accepted fixes / (accepted + rejected fixes);
 false-positive and unknown outcomes are excluded, and a repository with no such outcomes has
 an unknown (`null`) rate. See
 [`docs/architecture.md`](docs/architecture.md#explicit-feedback-persistence) for the trust
 boundaries and dashboard prerequisites.
 
-For local OAuth, register a GitHub OAuth App with callback `http://localhost:8000/auth/github/callback`,
+For local OAuth, configure the separate DocDrift dashboard OAuth application credentials
+with callback `http://localhost:8000/auth/github/callback`,
 set the three OAuth/encryption variables above, and set `DOCDRIFT_DASHBOARD_COOKIE_SECURE=false`
 for localhost HTTP. Set `DOCDRIFT_DASHBOARD_ORIGIN` to the exact dashboard web origin (default
 `http://localhost:5173`); the API grants credentialed CORS only to that origin and redirects OAuth

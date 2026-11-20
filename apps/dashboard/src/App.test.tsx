@@ -84,6 +84,29 @@ describe("dashboard", () => {
     expect(await screen.findByText("No repositories available")).toBeInTheDocument();
   });
 
+  it("synchronizes repositories with CSRF and reports success only after the API accepts it", async () => {
+    document.cookie = "docdrift_csrf=test-token; path=/";
+    server.use(http.post(`${API}/repositories/sync`, ({ request }) => {
+      expect(request.headers.get("X-CSRF-Token")).toBe("test-token");
+      return HttpResponse.json({ synced_installations: 1, synced_repositories: 1 });
+    }));
+    const user = userEvent.setup();
+    mount("/repositories");
+    await user.click(await screen.findByRole("button", { name: "Sync repositories" }));
+    expect(await screen.findByRole("status")).toHaveTextContent(/synchronization complete: 1 repositories available/i);
+    expect(await screen.findByText("octo/example")).toBeInTheDocument();
+  });
+
+  it("does not report an installation as connected when synchronization fails", async () => {
+    document.cookie = "docdrift_csrf=test-token; path=/";
+    server.use(http.post(`${API}/repositories/sync`, () => HttpResponse.json({ detail: "Repository synchronization failed. Please retry." }, { status: 503 })));
+    const user = userEvent.setup();
+    mount("/repositories");
+    await user.click(await screen.findByRole("button", { name: "Sync repositories" }));
+    expect(await screen.findByRole("alert")).toHaveTextContent(/repository synchronization failed/i);
+    expect(screen.queryByText(/synchronization complete/i)).not.toBeInTheDocument();
+  });
+
   it("keeps long repository and source paths readable in their existing views", async () => {
     const longRepository = `${"o".repeat(39)}/${"r".repeat(90)}`;
     const longPath = `docs/${"nested-directory/".repeat(9)}reference-guide.md`;

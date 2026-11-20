@@ -392,10 +392,12 @@ class CheckRunPublisherTests(unittest.IsolatedAsyncioTestCase):
         publisher = make_publisher(api)
         finding = FakeFinding(claim_type="default_value")
         original = "The default timeout is 60."
+        document_prefix = "intro\n" * (finding.document_line - 1)
+        original_document = document_prefix + original + "\n"
         patch = create_span_patch(
-            original + "\n",
-            start_offset=0,
-            end_offset=len(original),
+            original_document,
+            start_offset=len(document_prefix),
+            end_offset=len(document_prefix) + len(original),
             expected_original=original,
             replacement_text="The default timeout is 30.",
         )
@@ -431,7 +433,7 @@ class CheckRunPublisherTests(unittest.IsolatedAsyncioTestCase):
             head_sha="a" * 40,
             external_id="docdrift:run:4:head:" + "a" * 40,
             findings=[finding],
-            inline_min_severity="breaking",
+            inline_min_severity="misleading",
             max_inline_comments=1,
             verified_fix_suggestions=[suggestion],
         )
@@ -484,7 +486,7 @@ class CheckRunPublisherTests(unittest.IsolatedAsyncioTestCase):
             head_sha="a" * 40,
             external_id="docdrift:run:4:head:" + "a" * 40,
             findings=[finding],
-            inline_min_severity="breaking",
+            inline_min_severity="misleading",
             max_inline_comments=1,
             verified_fix_suggestions=[unapproved],
         )
