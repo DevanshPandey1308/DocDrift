@@ -21,3 +21,6 @@ benchmark/results/*
 !benchmark/results/latest.md
 !benchmark/results/before.json
 !benchmark/results/triage.md
+
+benchmark/real/repos/
+benchmark/real/snapshots/
