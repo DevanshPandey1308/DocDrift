@@ -1,0 +1,14 @@
+[
+  {"name": "requests", "url": "https://github.com/psf/requests"},
+  {"name": "click", "url": "https://github.com/pallets/click"},
+  {"name": "flask", "url": "https://github.com/pallets/flask"},
+  {"name": "httpx", "url": "https://github.com/encode/httpx"},
+  {"name": "uvicorn", "url": "https://github.com/encode/uvicorn"},
+  {"name": "starlette", "url": "https://github.com/encode/starlette"},
+  {"name": "typer", "url": "https://github.com/fastapi/typer"},
+  {"name": "rich", "url": "https://github.com/Textualize/rich"},
+  {"name": "mkdocs", "url": "https://github.com/mkdocs/mkdocs"},
+  {"name": "tqdm", "url": "https://github.com/tqdm/tqdm"},
+  {"name": "gunicorn", "url": "https://github.com/benoitc/gunicorn"},
+  {"name": "black", "url": "https://github.com/psf/black"}
+]

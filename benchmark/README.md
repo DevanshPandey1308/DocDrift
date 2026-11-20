@@ -113,3 +113,36 @@ v2 generator with the pre-policy engine on seeds 1337, 2024, and 777.
 independent label audit checks generated statements against code using
 standard-library AST/regex/TOML handling; it does not establish coverage for
 arbitrary prose or repositories.
+
+## Offline real-repository evaluation
+
+The real-repository pipeline is standard-library-only and never clones or fetches
+repositories. Place configured local clones under `benchmark/real/repos/`
+(`repos.json` lists their GitHub URLs for attribution). It mines reviewed
+documentation changes, builds fixed-revision cases, and scores the shipped core
+engine:
+
+```powershell
+$env:PYTHONPATH = ".;apps/api/src;packages/core/src;packages/cli/src;apps/mcp/src"
+python -m benchmark.real mine
+# Review candidates.csv using REVIEW.md; fill human_label with drifted, not_drift, or skip.
+python -m benchmark.real build
+python -m benchmark.real evaluate
+# Independently review current FALSE findings:
+python -m benchmark.real fp-sample
+# Fill fp_review.csv with real_drift, false_positive, or unclear.
+python -m benchmark.real fp-score
+```
+
+Mining is limited to recent non-merge commits and selected README/docs text
+files, with deterministic per-type balancing and caps. Evaluation archives the
+parent and fixed commits into ignored snapshots; it does not run repository
+code. Results and confirmed documentation bugs are written under
+`benchmark/results/real/`.
+
+Interpret these metrics cautiously. The mined sample is selection-biased toward
+documentation changes maintainers noticed; mined lines are not random. Recall
+applies only to reviewed mined lines, precision is measured only over sampled
+`FALSE` findings, labels can be noisy, and small sample sizes are descriptive
+counts rather than reliable rates. These figures are not an acceptance claim
+for arbitrary repositories.
