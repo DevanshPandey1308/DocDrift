@@ -1,0 +1,29 @@
+{
+  "tests/fixtures/clean_repo": [
+    "a76349d588f4f5a7",
+    "4f2d454accfd550f",
+    "5c492abf97a71ac5"
+  ],
+  "tests/fixtures/dynamic_route_repo": [
+    "b30bf67dfdef6868",
+    "0f9374d045f68c4c"
+  ],
+  "tests/fixtures/route_cli_repo": [
+    "0de07b0956668bc7",
+    "cb1d66bc59c259d3",
+    "fd0388ac3ae054f2",
+    "a74db84b81632c81",
+    "0a827bd58dd6f7ad",
+    "6b314a59af365c18",
+    "8d078904ecd84109"
+  ],
+  "tests/fixtures/sample_repo": [
+    "16682b00007509ac",
+    "7d4d98df590bb17e",
+    "e3bd1a68555fe2c1",
+    "de0fc679054c69fc",
+    "8e831c7917273628",
+    "4121eded2498bc4d",
+    "dd035772500ca34d"
+  ]
+}

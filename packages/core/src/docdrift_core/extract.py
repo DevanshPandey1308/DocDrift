@@ -20,6 +20,21 @@ _PATTERNS: tuple[tuple[ClaimType, re.Pattern[str]], ...] = (
 )
 _PARAMS = re.compile(r"\s*\*{0,2}([A-Za-z_]\w*)\s*(?:=.*)?\s*")
 _LITERAL = re.compile(r"^(?:None|True|False|-?\d+(?:\.\d+)?|['\"][^'\"]*['\"]|`(?:None|True|False|-?\d+(?:\.\d+)?|[^`]+)`)$")
+_UNIT_VALUE = re.compile(
+    r"^\s*(`?-?\d+(?:\.\d+)?`?)\s+(seconds?|s|ms|milliseconds?|minutes?|hours?|bytes?|KB|MB)\s*$",
+    re.IGNORECASE,
+)
+_INLINE_DEFAULT = re.compile(
+    r"`([A-Za-z_]\w*)`\s*(?:\(\s*default\s*:?[ \t]*([^)]*)\)|defaults?\s+to\s+([^.,;]+))",
+    re.IGNORECASE,
+)
+_CALL_SIGNATURE = re.compile(r"`([A-Za-z_]\w*)\(([^()]*)\)`")
+_VERSION_FORMS = re.compile(
+    r"\bPython\s*(?:>=\s*(\d+\.\d+)|(\d+\.\d+)\s*(?:\+|or\s+(?:higher|later)))(?!\w|\.\d)",
+    re.IGNORECASE,
+)
+_TABLE_IDENTIFIER = re.compile(r"^`([A-Za-z_]\w*)`$")
+_TABLE_SEPARATOR = re.compile(r"^:?-{3,}:?$")
 _TUTORIAL_FILE_INSTRUCTIONS: tuple[re.Pattern[str], ...] = (
     re.compile(r"^\s*(?:[-*+]\s+)?(?:now\s+)?create\s+(?:(?:a|an|another|the|new)\s+)?(?:empty\s+|demo\s+)?(?:file|module)(?:/module)?\s+`([^`]+)`(?:\s+(?:with|containing)\b.*|[.:]?\s*$)", re.I),
     re.compile(r"^\s*(?:[-*+]\s+)?(?:now\s+)?create\s+(?:(?:a|an|another|new)\s+)?`([^`]+)`(?:\s+(?:file|module))?(?:\s+(?:with|containing|in|inside|under)\b.*|[.:]?\s*$)", re.I),
@@ -65,6 +80,9 @@ def _expected(kind: ClaimType, match: re.Match[str]) -> object:
         return {"parameters": params}
     if kind is ClaimType.DEFAULT:
         val = match.group(2).strip().strip("` ")
+        unit = _UNIT_VALUE.fullmatch(val)
+        if unit:
+            return {"value": unit.group(1).strip("`"), "unit": unit.group(2)}
         if not _LITERAL.fullmatch(match.group(2).strip()):
             return {"value": val, "ambiguous": True}
         return {"value": val}
@@ -80,12 +98,72 @@ def extract_markdown(text: str, document_path: str) -> list[Claim]:
     claims: list[Claim] = []
     fenced = False
     seen: set[tuple[str, int, str]] = set()
+    table_header: list[str] | None = None
+    table_separator_pending = False
+
+    def add_claim(kind: ClaimType, subject: str, expected: object, line: str,
+                  line_no: int, start: int, end: int, match_text: str) -> None:
+        key = (kind.value, line_no, match_text)
+        if key in seen:
+            return
+        seen.add(key)
+        raw = f"{document_path}:{line_no}:{kind.value}:{subject}:{match_text}"
+        claim_id = hashlib.sha256(raw.encode("utf-8")).hexdigest()[:16]
+        claims.append(Claim(claim_id, kind, subject, expected, line, document_path,
+                            line_no, start, end))
+
     for line_no, line in enumerate(text.splitlines(), 1):
         if re.match(r"^\s*(```|~~~)", line):
             fenced = not fenced
+            table_header = None
+            table_separator_pending = False
             continue
         if fenced:
             continue
+
+        cells = [cell.strip() for cell in line.strip().strip("|").split("|")]
+        if table_header is not None and "|" in line:
+            if all(_TABLE_SEPARATOR.fullmatch(cell) for cell in cells):
+                if table_separator_pending:
+                    table_separator_pending = False
+                else:
+                    table_header = None
+                continue
+            is_new_header = (
+                len(cells) >= 2
+                and cells[0].strip("` ").casefold() in {"name", "parameter", "option"}
+            )
+            if is_new_header:
+                table_header = None
+                table_separator_pending = False
+            elif table_separator_pending:
+                table_header = None
+            elif len(cells) == len(table_header):
+                first = _TABLE_IDENTIFIER.fullmatch(cells[0])
+                default_value = cells[table_header.index("default")].strip("` ")
+                if first and default_value.casefold() not in {"", "-", "—", "required", "n/a"}:
+                    value_match = _UNIT_VALUE.fullmatch(default_value)
+                    value = value_match.group(1).strip("`") if value_match else default_value
+                    expected: dict[str, object] = {"value": value}
+                    if value_match:
+                        expected["unit"] = value_match.group(2)
+                    elif not _LITERAL.fullmatch(default_value):
+                        expected["ambiguous"] = True
+                    add_claim(ClaimType.DEFAULT, first.group(1), expected, line,
+                              line_no, 0, len(line), f"table-default:{first.group(1)}")
+                continue
+            else:
+                table_header = None
+        elif table_header is not None:
+            table_header = None
+            table_separator_pending = False
+
+        if "|" in line:
+            header_cells = [cell.strip().casefold() for cell in cells]
+            if "default" in header_cells and len(header_cells) >= 2:
+                table_header = header_cells
+                table_separator_pending = True
+
         for kind, pattern in _PATTERNS:
             for match in pattern.finditer(line):
                 subject = match.group(1)
@@ -101,14 +179,44 @@ def extract_markdown(text: str, document_path: str) -> list[Claim]:
                     if _is_tutorial_file_instruction(line, match.group(1)):
                         continue
                 expected = _expected(kind, match)
-                key = (kind.value, line_no, match.group(0))
-                if key in seen:
+                add_claim(kind, subject, expected, line, line_no, match.start(),
+                          match.end(), match.group(0))
+
+        for match in _INLINE_DEFAULT.finditer(line):
+            raw_value = (match.group(2) or match.group(3) or "").strip()
+            value = raw_value.strip("` ")
+            unit_match = _UNIT_VALUE.fullmatch(value)
+            expected = {"value": unit_match.group(1).strip("`") if unit_match else value}
+            if unit_match:
+                expected["unit"] = unit_match.group(2)
+            elif not _LITERAL.fullmatch(raw_value):
+                expected["ambiguous"] = True
+            add_claim(ClaimType.DEFAULT, match.group(1), expected, line, line_no,
+                      match.start(), match.end(), match.group(0))
+
+        for match in _CALL_SIGNATURE.finditer(line):
+            for parameter in match.group(2).split(","):
+                name_value = re.fullmatch(r"\s*([A-Za-z_]\w*)\s*=\s*(.*?)\s*", parameter)
+                if not name_value:
                     continue
-                seen.add(key)
-                raw = f"{document_path}:{line_no}:{kind.value}:{subject}:{match.group(0)}"
-                claim_id = hashlib.sha256(raw.encode("utf-8")).hexdigest()[:16]
-                claims.append(Claim(claim_id, kind, subject, expected, line, document_path,
-                                    line_no, match.start(), match.end()))
+                raw_value = name_value.group(2)
+                if not _LITERAL.fullmatch(raw_value):
+                    continue
+                add_claim(
+                    ClaimType.DEFAULT,
+                    name_value.group(1),
+                    {"value": raw_value.strip("`"), "function": match.group(1)},
+                    line,
+                    line_no,
+                    match.start(),
+                    match.end(),
+                    f"{match.group(0)}:{name_value.group(1)}",
+                )
+
+        for match in _VERSION_FORMS.finditer(line):
+            version = match.group(1) or match.group(2)
+            add_claim(ClaimType.PYTHON_VERSION, version, {"version": version}, line,
+                      line_no, match.start(), match.end(), match.group(0))
     return claims
 
 

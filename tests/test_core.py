@@ -151,7 +151,13 @@ class CoreTests(unittest.TestCase):
                 "The default optional is 1.\n"
             )
             findings, _, _ = analyze(root, ("guide.md",), ("one.py",))
-            self.assertEqual([f.verdict for f in findings], [Verdict.TRUE, Verdict.UNVERIFIABLE, Verdict.UNVERIFIABLE, Verdict.TRUE])
+            functions = [f for f in findings if f.claim.type.value == "function_signature"]
+            defaults = [f for f in findings if f.claim.type.value == "default_value"]
+            self.assertEqual(
+                [f.verdict for f in functions],
+                [Verdict.TRUE, Verdict.UNVERIFIABLE, Verdict.UNVERIFIABLE],
+            )
+            self.assertEqual([f.verdict for f in defaults], [Verdict.TRUE, Verdict.TRUE])
             (root / "two.py").write_text("def target(required, /, positional, *args, keyword, optional=1, **kwargs): return None\n")
             ambiguous, _, _ = analyze(root, ("guide.md",), (".",))
             self.assertEqual(ambiguous[0].verdict, Verdict.UNVERIFIABLE)

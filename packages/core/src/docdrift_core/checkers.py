@@ -64,31 +64,61 @@ def _normal_literal(value: object) -> tuple[bool, object]:
 
 
 def check_default(claim: Claim, index: CodeIndex) -> Finding:
+    unit_note = (
+        f" Documented unit {claim.expected['unit']!r} is not checked."
+        if "unit" in claim.expected
+        else ""
+    )
     if not _source_complete(index):
-        return _finding(claim, Verdict.UNVERIFIABLE, "Python source indexing was incomplete; parameter uniqueness cannot be established.")
+        return _finding(claim, Verdict.UNVERIFIABLE, "Python source indexing was incomplete; parameter uniqueness cannot be established." + unit_note)
     expected_raw = claim.expected.get("value")
     if claim.expected.get("ambiguous"):
-        return _finding(claim, Verdict.UNVERIFIABLE, "Default expression is outside the supported literal grammar.")
+        return _finding(claim, Verdict.UNVERIFIABLE, "Default expression is outside the supported literal grammar." + unit_note)
     ok, expected = _normal_literal(expected_raw)
     if not ok:
-        return _finding(claim, Verdict.UNVERIFIABLE, "Documented default cannot be normalized safely.")
-    matches = [p for values in index.functions.values() for f in values for p in f.parameters if p.name == claim.subject]
-    unique = {(f.path, f.line, p.name): (f, p) for values in index.functions.values() for f in values for p in f.parameters if p.name == claim.subject}
+        return _finding(claim, Verdict.UNVERIFIABLE, "Documented default cannot be normalized safely." + unit_note)
+    qualified_function = claim.expected.get("function")
+    if qualified_function is not None:
+        functions = index.functions.get(str(qualified_function), [])
+        if len(functions) != 1:
+            return _finding(claim, Verdict.UNVERIFIABLE,
+                            "The documented function is missing or ambiguous in source." + unit_note)
+        function_info = functions[0]
+        selected = [p for p in function_info.parameters if p.name == claim.subject]
+        unique = {
+            (function_info.path, function_info.line, p.name): (function_info, p)
+            for p in selected
+        }
+    else:
+        unique = {
+            (f.path, f.line, p.name): (f, p)
+            for values in index.functions.values()
+            for f in values
+            for p in f.parameters
+            if p.name == claim.subject
+        }
     if not unique:
-        return _finding(claim, Verdict.UNVERIFIABLE, "No statically indexed parameter matches this name.")
+        return _finding(claim, Verdict.UNVERIFIABLE, "No statically indexed parameter matches this name." + unit_note)
     if len(unique) != 1:
-        return _finding(claim, Verdict.UNVERIFIABLE, "Parameter name is ambiguous across functions.")
+        return _finding(claim, Verdict.UNVERIFIABLE, "Parameter name is ambiguous across functions." + unit_note)
     function, param = next(iter(unique.values()))
     evidence = index.evidence(function.path, function.line)
     ev = (evidence,) if evidence else ()
     if not param.has_default:
-        return _finding(claim, Verdict.FALSE, f"Parameter {param.name} has no explicit default in source.", ev)
+        return _finding(claim, Verdict.FALSE, f"Parameter {param.name} has no explicit default in source." + unit_note, ev)
     if not param.default_resolved:
-        return _finding(claim, Verdict.UNVERIFIABLE, f"Parameter {param.name} has a default that is not a safely representable literal.", ev)
+        return _finding(claim, Verdict.UNVERIFIABLE, f"Parameter {param.name} has a default that is not a safely representable literal." + unit_note, ev)
     actual = param.default
     if actual == expected and type(actual) is type(expected):
+        if "unit" in claim.expected:
+            return _finding(
+                claim,
+                Verdict.TRUE,
+                f"Numeric default for {param.name} matches." + unit_note,
+                ev,
+            )
         return _finding(claim, Verdict.TRUE, f"Explicit default for {param.name} matches.", ev)
-    return _finding(claim, Verdict.FALSE, f"Documented default {expected!r} differs from source default {actual!r}.", ev)
+    return _finding(claim, Verdict.FALSE, f"Documented default {expected!r} differs from source default {actual!r}." + unit_note, ev)
 
 
 def check_flag(claim: Claim, index: CodeIndex) -> Finding:
