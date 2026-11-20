@@ -16,3 +16,6 @@ dist/
 .idea/
 .vscode/
 *.swp
+benchmark/datasets/synthetic/
+benchmark/results/*
+!benchmark/results/latest.md

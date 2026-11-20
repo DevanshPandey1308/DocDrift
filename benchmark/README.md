@@ -1,3 +1,105 @@
-# Benchmark plan
+# Deterministic-engine benchmark
 
-No benchmark has been run. Future benchmark work should define a versioned collection of small repositories, claim-level expected outcomes, deterministic runner, environment and Python version, and separately report precision, recall, abstention rate, runtime, and memory. Publish the dataset and runner before reporting performance numbers.
+This package generates small, reproducible repositories, runs the shipped
+DocDrift CLI in JSON mode, and reports precision, recall, F1, extraction, and
+abstention metrics. The harness itself uses the Python standard library and
+the core dependencies already required by DocDrift.
+
+## Run it
+
+From the repository root, with the core and CLI dependencies installed and the
+monorepo source paths available:
+
+```powershell
+$env:PYTHONPATH = ".;apps/api/src;packages/core/src;packages/cli/src;apps/mcp/src"
+python -m benchmark.harness generate --seed 1337 --repos 60
+python -m benchmark.harness run --seed 1337 --repos 60 --write-baseline
+python -m benchmark.harness check --baseline benchmark/baseline.json --tolerance 0.02
+```
+
+`generate` defaults to seed `1337` and 60 repositories. It replaces only the
+generated `benchmark/datasets/synthetic/` directory. Repeating the same seed
+and repository count produces byte-identical dataset files. `run` defaults to
+`benchmark/results/latest` and prints progress after every ten repositories.
+It writes `results.json`, `results.md`, and `failures.csv`; the Markdown report
+is also copied to `benchmark/results/latest.md`. `--write-baseline` stores
+overall precision/recall and per-claim-type recall in `benchmark/baseline.json`
+without timestamps or latency. `check` compares those values to the most
+recent results and exits 1 when any current metric is below its baseline by
+more than the tolerance.
+
+Options `--dataset-root` and `--out` are available on `generate` and `run` to
+use temporary datasets or output directories. `check` also accepts `--out`.
+
+## Dataset format (schema version 1)
+
+Each case has a normal repository tree and a manifest:
+
+```text
+benchmark/datasets/<name>/<case_id>/
+  repo/                 # source, docs, metadata and referenced files
+  manifest.json
+```
+
+The manifest is UTF-8 JSON with this shape:
+
+```json
+{
+  "schema_version": 1,
+  "case_id": "case-0000",
+  "mutated": false,
+  "statements": [
+    {
+      "path": "docs/README.md",
+      "line": 12,
+      "claim_type": "default_value",
+      "category": "canonical",
+      "label": "correct",
+      "subject": "timeout",
+      "operator": null,
+      "text": "The default timeout is 30."
+    }
+  ]
+}
+```
+
+`path`, one-based `line`, and `text` must point to the exact line in the case
+repository. Supported claim types are `default_value`, `function_signature`,
+`cli_flag`, `environment_variable`, `file_path`, `python_version`, and `route`.
+Categories are `canonical`, `natural_supported`, `unsupported_prose`,
+`paraphrase_named`, and `decoy`. Labels are `correct`, `drifted`, and `decoy`.
+An operator names the source-code mutation responsible for a drifted statement;
+otherwise it is null. A case has 8–14 statements with one statement per line.
+Hand-mined real-repository cases can use the same schema.
+
+The seeded generator includes at least six phrase templates each for
+unsupported prose, named paraphrases, and decoys. Roughly 35% of generated
+repositories are unmutated negative controls. Mutations change code, not docs,
+using default changes, parameter/flag/environment/route renames, parameter
+addition, file deletion, and Python-version changes.
+
+## Metrics
+
+A statement is flagged only when any finding on its line is `false`. A
+drifted false line is a true positive; a correct or decoy false line is a false
+positive. A drifted line without a false verdict is a false negative, classified
+as `not_extracted`, `unverifiable`, or `judged_true`. Precision and recall are
+null when their denominators are zero; F1 is null when it cannot be defined.
+Extraction rate counts any finding on the statement line. Abstention rate is
+reported over correct statements. Results include overall, per-claim-type,
+per-category, and per-operator metrics, plus per-case p50/p95 analysis latency.
+
+N1, `flag-all-mentions`, flags a statement when its subject appears among
+symbols or repository paths in the code of a mutated case. It deliberately
+flags nothing in unmutated cases, making it a generous baseline. FP/FN details
+are listed in `failures.csv`.
+
+## Limitations
+
+This dataset is synthetic and template-generated, so its metrics indicate
+harness behavior and are not evidence of real-world accuracy. Recall by
+category shows where the extractor does not look. A real-repository dataset is
+still pending. Targets from the project blueprint are goals, **not benchmark
+results**. The independent label audit checks generated statements against
+code using standard-library AST/regex/TOML handling; it does not establish
+coverage for arbitrary prose or repositories.

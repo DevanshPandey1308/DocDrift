@@ -1,0 +1,16 @@
+{
+  "overall": {
+    "precision": 0.87234,
+    "recall": 0.66129
+  },
+  "per_claim_type_recall": {
+    "cli_flag": 0.0,
+    "default_value": 0.714286,
+    "environment_variable": 0.0,
+    "file_path": 1.0,
+    "function_signature": 1.0,
+    "python_version": 1.0,
+    "route": 0.0
+  },
+  "schema_version": 1
+}
