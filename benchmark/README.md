@@ -33,7 +33,10 @@ use temporary datasets or output directories. `check` also accepts `--out`.
 
 ## Dataset format (schema version 1)
 
-Each case has a normal repository tree and a manifest:
+Generator version 2 preserves the original seeded statements and appends four
+third-party decoy commands from an independent `Random(seed + 1)` stream. The
+same decoys occur in mutated and unmutated controls. Each case has a normal
+repository tree and a manifest:
 
 ```text
 benchmark/datasets/<name>/<case_id>/
@@ -46,6 +49,7 @@ The manifest is UTF-8 JSON with this shape:
 ```json
 {
   "schema_version": 1,
+  "generator_version": 2,
   "case_id": "case-0000",
   "mutated": false,
   "statements": [
@@ -67,13 +71,15 @@ The manifest is UTF-8 JSON with this shape:
 repository. Supported claim types are `default_value`, `function_signature`,
 `cli_flag`, `environment_variable`, `file_path`, `python_version`, and `route`.
 Categories are `canonical`, `natural_supported`, `unsupported_prose`,
-`paraphrase_named`, and `decoy`. Labels are `correct`, `drifted`, and `decoy`.
-An operator names the source-code mutation responsible for a drifted statement;
-otherwise it is null. A case has 8–14 statements with one statement per line.
-Hand-mined real-repository cases can use the same schema.
+`paraphrase_named`, `decoy`, and `decoy_third_party`. Labels are `correct`,
+`drifted`, and `decoy`. An operator names the source-code mutation responsible
+for a drifted statement; otherwise it is null. A v2 case has 18 statements
+with one statement per line: the original 14 plus four third-party decoys,
+including `pytest --cov`, `HTTP_PROXY`, `pip install -e .`, and
+`docker run --rm`. Hand-mined real-repository cases can use the same schema.
 
 The seeded generator includes at least six phrase templates each for
-unsupported prose, named paraphrases, and decoys. Roughly 35% of generated
+unsupported prose, named paraphrases, and the original decoys. Roughly 35% of generated
 repositories are unmutated negative controls. Mutations change code, not docs,
 using default changes, parameter/flag/environment/route renames, parameter
 addition, file deletion, and Python-version changes.
@@ -87,7 +93,8 @@ as `not_extracted`, `unverifiable`, or `judged_true`. Precision and recall are
 null when their denominators are zero; F1 is null when it cannot be defined.
 Extraction rate counts any finding on the statement line. Abstention rate is
 reported over correct statements. Results include overall, per-claim-type,
-per-category, and per-operator metrics, plus per-case p50/p95 analysis latency.
+per-category, per-operator, claim-type-by-category, and claim-type-by-label
+metrics, plus per-case p50/p95 analysis latency.
 
 N1, `flag-all-mentions`, flags a statement when its subject appears among
 symbols or repository paths in the code of a mutated case. It deliberately
@@ -100,6 +107,9 @@ This dataset is synthetic and template-generated, so its metrics indicate
 harness behavior and are not evidence of real-world accuracy. Recall by
 category shows where the extractor does not look. A real-repository dataset is
 still pending. Targets from the project blueprint are goals, **not benchmark
-results**. The independent label audit checks generated statements against
-code using standard-library AST/regex/TOML handling; it does not establish
-coverage for arbitrary prose or repositories.
+results**. `benchmark/results/before.json` contains aggregate metrics for the
+v2 generator with the pre-policy engine on seeds 1337, 2024, and 777.
+`benchmark/results/triage.md` records seed-1337 failure classifications. The
+independent label audit checks generated statements against code using
+standard-library AST/regex/TOML handling; it does not establish coverage for
+arbitrary prose or repositories.

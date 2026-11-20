@@ -19,3 +19,5 @@ dist/
 benchmark/datasets/synthetic/
 benchmark/results/*
 !benchmark/results/latest.md
+!benchmark/results/before.json
+!benchmark/results/triage.md

@@ -55,6 +55,27 @@ class BenchmarkHarnessTests(unittest.TestCase):
                     lines = (case_dir / "repo" / statement["path"]).read_text(encoding="utf-8").splitlines()
                     self.assertEqual(lines[statement["line"] - 1], statement["text"])
 
+    def test_generator_v2_includes_third_party_decoys_for_clean_and_mutated_cases(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            clean = generate_case(root, 0, random.Random(0))
+            mutated = generate_case(root, 1, random.Random(72), ["change_default"])
+            for manifest in (clean, mutated):
+                self.assertEqual(manifest["generator_version"], 2)
+                self.assertEqual(manifest["mutated"], manifest is mutated)
+                decoys = [item for item in manifest["statements"] if item["category"] == "decoy_third_party"]
+                self.assertEqual(len(decoys), 4)
+                self.assertTrue(all(item["label"] == "decoy" for item in decoys))
+                self.assertEqual(
+                    {item["text"] for item in decoys},
+                    {
+                        "Run `pytest --cov` to measure coverage.",
+                        "Set `HTTP_PROXY` to use a proxy.",
+                        "Run `pip install -e .` to install the project.",
+                        "Use `docker run --rm` for a disposable container.",
+                    },
+                )
+
     def test_independent_labels_and_each_operator_flip_only_relevant_statements(self) -> None:
         with tempfile.TemporaryDirectory() as temporary:
             root = Path(temporary)

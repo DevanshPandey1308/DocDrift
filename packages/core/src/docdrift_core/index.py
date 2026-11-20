@@ -4,6 +4,8 @@ from __future__ import annotations
 
 import ast
 import os
+import re
+import tomllib
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
@@ -74,6 +76,16 @@ class CodeIndex:
     environment: dict[str, list[Evidence]] = field(default_factory=dict)
     environment_defaults: dict[str, list[EnvironmentDefaultInfo]] = field(default_factory=dict)
     scanned_paths: set[str] = field(default_factory=set)
+    source_scopes: tuple[str, ...] = ()
+    source_text_files: dict[str, str] = field(default_factory=dict)
+    environment_text_files: dict[str, str] = field(default_factory=dict)
+    source_text_complete: bool = True
+    environment_text_complete: bool = True
+    cli_declarations: int = 0
+    dynamic_cli_declarations: int = 0
+    parser_programs: set[str] = field(default_factory=set)
+    project_script_names: set[str] = field(default_factory=set)
+    dynamic_environment_access: bool = False
     errors: list[AnalysisError] = field(default_factory=list)
 
     def evidence(self, path: str, line: int) -> Evidence | None:
@@ -116,6 +128,68 @@ def _signature(node: ast.FunctionDef | ast.AsyncFunctionDef) -> tuple[Parameter,
     return tuple(result)
 
 
+def _os_attribute(node: ast.AST) -> bool:
+    return isinstance(node, ast.Attribute) and ast.unparse(node) == "os.environ"
+
+
+def _dynamic_environment_access(tree: ast.Module) -> bool:
+    """Return true when common environment access cannot be statically enumerated."""
+    dynamic = False
+    literal_environment_nodes: set[int] = set()
+    for node in ast.walk(tree):
+        if isinstance(node, (ast.Import, ast.ImportFrom)):
+            if isinstance(node, ast.Import) and any(alias.name == "os" and alias.asname for alias in node.names):
+                dynamic = True
+            if isinstance(node, ast.ImportFrom) and node.module == "os" and any(
+                alias.name in {"environ", "getenv"} for alias in node.names
+            ):
+                dynamic = True
+        if isinstance(node, ast.Subscript) and _os_attribute(node.value):
+            if not (isinstance(node.slice, ast.Constant) and isinstance(node.slice.value, str)):
+                dynamic = True
+            else:
+                literal_environment_nodes.add(id(node.value))
+        if isinstance(node, ast.Call):
+            function = ast.unparse(node.func)
+            if function == "os.getenv":
+                key = node.args[0] if node.args else next(
+                    (keyword.value for keyword in node.keywords if keyword.arg == "key"), None
+                )
+                if not (isinstance(key, ast.Constant) and isinstance(key.value, str)):
+                    dynamic = True
+            elif function == "os.environ.get":
+                key = node.args[0] if node.args else next(
+                    (keyword.value for keyword in node.keywords if keyword.arg == "key"), None
+                )
+                if not (isinstance(key, ast.Constant) and isinstance(key.value, str)):
+                    dynamic = True
+                if isinstance(node.func, ast.Attribute) and _os_attribute(node.func.value):
+                    literal_environment_nodes.add(id(node.func.value))
+            if any(keyword.arg is None and _os_attribute(keyword.value) for keyword in node.keywords):
+                dynamic = True
+        if isinstance(node, ast.Attribute) and _os_attribute(node) and id(node) not in literal_environment_nodes:
+            dynamic = True
+    return dynamic
+
+
+def _is_environment_text(path: Path) -> bool:
+    name = path.name.casefold()
+    return (
+        path.suffix.casefold() in {".py", ".toml", ".yml", ".yaml", ".json"}
+        or name.startswith(".env")
+        or name == "dockerfile"
+    )
+
+
+def _readable_source_text(path: Path) -> str | None:
+    if path.suffix.casefold() in {".md", ".markdown"}:
+        return None
+    try:
+        return path.read_text(encoding="utf-8")
+    except (OSError, UnicodeError):
+        return None
+
+
 class _Visitor(ast.NodeVisitor):
     def __init__(self, rel: str, index: CodeIndex) -> None:
         self.rel, self.index = rel, index
@@ -135,14 +209,22 @@ class _Visitor(ast.NodeVisitor):
         is_python_app = constructor in {"FastAPI", "Flask"}
         is_prefixable = constructor in {"APIRouter", "Blueprint"}
         if is_parser:
+            self.index.cli_declarations += 1
+            if isinstance(value, ast.Call):
+                prog = next((keyword.value for keyword in value.keywords if keyword.arg == "prog"), None)
+                prog_ok, prog_value = _literal(prog) if prog is not None else (False, None)
+                if prog_ok and isinstance(prog_value, str) and prog_value:
+                    self.index.parser_programs.add(prog_value)
             for target in node.targets:
                 if isinstance(target, ast.Name):
                     self.argparse_parsers.add(target.id)
         for target in node.targets:
             if isinstance(target, ast.Name):
                 if is_typer:
+                    self.index.cli_declarations += 1
                     self.typer_apps.add(target.id)
                 if is_click_group:
+                    self.index.cli_declarations += 1
                     self.click_groups.add(target.id)
                 if is_python_app:
                     self.python_apps[target.id] = constructor
@@ -156,10 +238,22 @@ class _Visitor(ast.NodeVisitor):
         self.generic_visit(node)
 
     def visit_FunctionDef(self, node: ast.FunctionDef) -> None:
+        self._mark_unresolved_route_decorators(node.decorator_list)
         self._function(node)
 
     def visit_AsyncFunctionDef(self, node: ast.AsyncFunctionDef) -> None:
+        self._mark_unresolved_route_decorators(node.decorator_list)
         self._function(node)
+
+    def _mark_unresolved_route_decorators(self, decorators: list[ast.expr]) -> None:
+        route_names = {"get", "post", "put", "patch", "delete", "options", "head", "route", "api_route"}
+        for decorator in decorators:
+            function = decorator.func if isinstance(decorator, ast.Call) else decorator
+            if not isinstance(function, ast.Attribute) or function.attr.lower() not in route_names:
+                continue
+            receiver = ast.unparse(function.value)
+            if receiver not in self.python_apps and receiver not in self.route_prefixes:
+                self.index.routes_complete = False
 
     def _function(self, node: ast.FunctionDef | ast.AsyncFunctionDef) -> None:
         qualified = ".".join([*self.scopes, node.name])
@@ -175,6 +269,8 @@ class _Visitor(ast.NodeVisitor):
             for name in decorator_names
         )
         typer_command = any(name.endswith(".command") and name.split(".")[0] in self.typer_apps for name in decorator_names)
+        if click_command or typer_command:
+            self.index.cli_declarations += 1
         if click_command:
             for decorator in node.decorator_list:
                 if not isinstance(decorator, ast.Call) or not isinstance(decorator.func, ast.Attribute):
@@ -190,10 +286,13 @@ class _Visitor(ast.NodeVisitor):
                 if not isinstance(default, ast.Call) or ast.unparse(default.func) != "typer.Option":
                     continue
                 options: list[str] = []
+                dynamic_option = False
                 for value in default.args[1:]:
                     ok, literal = _literal(value)
                     if ok and isinstance(literal, str) and literal.startswith("-"):
                         options.append(literal)
+                    elif not ok:
+                        dynamic_option = True
                 for kw in default.keywords:
                     if kw.arg in {"param_decls", "declaration"}:
                         ok, literal = _literal(kw.value)
@@ -201,8 +300,12 @@ class _Visitor(ast.NodeVisitor):
                             options.append(literal)
                         elif ok and isinstance(literal, (tuple, list)):
                             options.extend(item for item in literal if isinstance(item, str) and item.startswith("-"))
+                        elif not ok:
+                            dynamic_option = True
                 for option in options:
                     self.index.flags.setdefault(option, []).append(FlagInfo(option, self.rel, default.lineno))
+                if dynamic_option or not options:
+                    self.index.dynamic_cli_declarations += 1
         self.scopes.append(node.name)
         for decorator in node.decorator_list:
             self.visit(decorator)
@@ -213,11 +316,18 @@ class _Visitor(ast.NodeVisitor):
     def visit_Call(self, node: ast.Call) -> None:
         name = node.func.attr if isinstance(node.func, ast.Attribute) else ""
         receiver = ast.unparse(node.func.value) if isinstance(node.func, ast.Attribute) else ""
-        if name == "add_argument" and receiver in self.argparse_parsers:
-            self._index_flag_call(node)
+        if name == "add_argument":
+            if receiver in self.argparse_parsers:
+                self._index_flag_call(node)
+            else:
+                # An unknown receiver may be an alias or a parser constructed
+                # dynamically. It cannot safely support an absence conclusion.
+                self.index.dynamic_cli_declarations += 1
         if name == "include_router" and receiver in self.python_apps:
             self.index.routes_complete = False
         if name == "register_blueprint" and receiver in self.python_apps:
+            self.index.routes_complete = False
+        if name in {"add_api_route", "add_url_rule"} and receiver in self.python_apps:
             self.index.routes_complete = False
         if isinstance(node.func, ast.Attribute) and node.func.attr in {"get", "post", "put", "patch", "delete", "options", "head", "route", "api_route"}:
             if receiver in self.python_apps or receiver in self.route_prefixes:
@@ -238,10 +348,13 @@ class _Visitor(ast.NodeVisitor):
 
     def _index_flag_call(self, node: ast.Call) -> None:
         options: list[str] = []
+        dynamic = False
         for arg in node.args:
             ok, value = _literal(arg)
             if ok and isinstance(value, str) and value.startswith("-"):
                 options.append(value)
+            elif not ok:
+                dynamic = True
         for kw in node.keywords:
             if kw.arg in {"param_decls", "declaration"}:
                 ok, value = _literal(kw.value)
@@ -249,6 +362,10 @@ class _Visitor(ast.NodeVisitor):
                     options.append(value)
                 elif ok and isinstance(value, (tuple, list)):
                     options.extend(item for item in value if isinstance(item, str) and item.startswith("-"))
+                elif not ok:
+                    dynamic = True
+        if dynamic:
+            self.index.dynamic_cli_declarations += 1
         for option in options:
             self.index.flags.setdefault(option, []).append(FlagInfo(option, self.rel, node.lineno))
 
@@ -299,14 +416,17 @@ class _Visitor(ast.NodeVisitor):
 
 def build_index(root: Path, source_dirs: tuple[str, ...] = (".",)) -> CodeIndex:
     root = root.resolve()
-    index = CodeIndex(root=root)
+    index = CodeIndex(root=root, source_scopes=source_dirs)
+    candidates_by_path: dict[str, Path] = {}
     for configured in source_dirs:
         base = (root / configured).resolve()
         if not base.is_relative_to(root) or not base.exists():
             index.errors.append(AnalysisError(configured, "source scope is missing or escapes repository", kind="configuration_error"))
             continue
+        scoped_paths: list[Path] = []
         if base.is_file():
-            candidates = [base]
+            candidates = [base] if base.suffix == ".py" else []
+            scoped_paths = [base]
             index.scanned_paths.add(base.relative_to(root).as_posix())
         else:
             candidates = []
@@ -316,23 +436,53 @@ def build_index(root: Path, source_dirs: tuple[str, ...] = (".",)) -> CodeIndex:
                 directories[:] = sorted(name for name in directories if not _excluded_directory(name))
                 for name in files:
                     path = current_path / name
-                    index.scanned_paths.add(path.relative_to(root).as_posix())
+                    scoped_paths.append(path)
+                    rel = path.relative_to(root).as_posix()
+                    index.scanned_paths.add(rel)
                     if path.suffix == ".py":
                         candidates.append(path)
-        for path in sorted(candidates):
-            if path.suffix != ".py":
-                continue
+        for path in candidates:
+            candidates_by_path[path.relative_to(root).as_posix()] = path
+        for path in scoped_paths:
             rel = path.relative_to(root).as_posix()
-            index.files.add(rel)
-            try:
-                source = path.read_text(encoding="utf-8")
-                tree = ast.parse(source, filename=rel)
-                _Visitor(rel, index).visit(tree)
-                # Fill evidence snippets after parsing; names and values are never included.
-                for name, occurrences in list(index.environment.items()):
-                    index.environment[name] = [Evidence(e.path, e.line, source.splitlines()[e.line - 1].strip()) if e.path == rel and e.line <= len(source.splitlines()) else e for e in occurrences]
-            except SyntaxError as exc:
-                index.errors.append(AnalysisError(rel, exc.msg, exc.lineno, exc.offset, "syntax_error"))
-            except (OSError, UnicodeError) as exc:
-                index.errors.append(AnalysisError(rel, str(exc), kind="read_error"))
+            text = _readable_source_text(path)
+            if text is None and path.suffix.casefold() not in {".md", ".markdown"}:
+                index.source_text_complete = False
+                if _is_environment_text(path):
+                    index.environment_text_complete = False
+            if text is not None:
+                index.source_text_files[rel] = text
+                if _is_environment_text(path):
+                    index.environment_text_files[rel] = text
+                if path.name.casefold() == "pyproject.toml":
+                    try:
+                        metadata = tomllib.loads(text)
+                        scripts = metadata.get("project", {}).get("scripts", {})
+                        gui_scripts = metadata.get("project", {}).get("gui-scripts", {})
+                        if isinstance(scripts, dict):
+                            index.project_script_names.update(name for name in scripts if isinstance(name, str))
+                        if isinstance(gui_scripts, dict):
+                            index.project_script_names.update(name for name in gui_scripts if isinstance(name, str))
+                    except (tomllib.TOMLDecodeError, AttributeError):
+                        pass
+    for rel, path in sorted(candidates_by_path.items()):
+        index.files.add(rel)
+        try:
+            source = path.read_text(encoding="utf-8")
+            tree = ast.parse(source, filename=rel)
+            if _dynamic_environment_access(tree):
+                index.dynamic_environment_access = True
+            _Visitor(rel, index).visit(tree)
+            # Fill evidence snippets after parsing; names and values are never included.
+            source_lines = source.splitlines()
+            for name, occurrences in list(index.environment.items()):
+                index.environment[name] = [
+                    Evidence(e.path, e.line, source_lines[e.line - 1].strip())
+                    if e.path == rel and e.line <= len(source_lines) else e
+                    for e in occurrences
+                ]
+        except SyntaxError as exc:
+            index.errors.append(AnalysisError(rel, exc.msg, exc.lineno, exc.offset, "syntax_error"))
+        except (OSError, UnicodeError) as exc:
+            index.errors.append(AnalysisError(rel, str(exc), kind="read_error"))
     return index

@@ -13,7 +13,7 @@ _PATTERNS: tuple[tuple[ClaimType, re.Pattern[str]], ...] = (
     (ClaimType.ROUTE, re.compile(r"\b(GET|POST|PUT|PATCH|DELETE|OPTIONS|HEAD)\s+`([^`]+)`\s+(?:endpoint|route)\b", re.I)),
     (ClaimType.FUNCTION, re.compile(r"`?([A-Za-z_]\w*(?:\.[A-Za-z_]\w*)*)\(([^()]*)\)`?\s+(?:accepts|takes|has parameters)\b", re.I)),
     (ClaimType.DEFAULT, re.compile(r"(?:the\s+)?default\s+(?:for\s+)?`?([A-Za-z_]\w*)`?\s+is\s+(`[^`]+`|[^.,;]+)", re.I)),
-    (ClaimType.CLI_FLAG, re.compile(r"(?:(?:run|invoke|use)(?:\s+the)?\s+(?:CLI|command)(?:\s+with)?\s+)?(`--[A-Za-z][\w-]*)`", re.I)),
+    (ClaimType.CLI_FLAG, re.compile(r"(?:(?:run|invoke|use)(?:\s+the)?\s+(?:CLI|command)(?:\s+with)?\s+)?`(--[A-Za-z][\w-]*|-h|-V)`", re.I)),
     (ClaimType.ENV_VAR, re.compile(r"(?:environment variable\s+)?`([A-Z][A-Z0-9_]*)`(?:\s+environment variable)?", re.I)),
     (ClaimType.FILE_PATH, re.compile(r"`([^`]+)`")),
     (ClaimType.PYTHON_VERSION, re.compile(r"requires\s+Python\s+([0-9]+(?:\.[0-9]+){0,2})\s+or newer", re.I)),
@@ -54,6 +54,10 @@ _TUTORIAL_FILE_INSTRUCTIONS: tuple[re.Pattern[str], ...] = (
     re.compile(r"^\s*here's what we do in\s+`([^`]+)`\s*:\s*$", re.I),
 )
 _TUTORIAL_SIBLING_FILES = re.compile(r"^\s*the file would live right beside\b.*:\s*$", re.I)
+_THIRD_PARTY_COMMAND_FLAG = re.compile(
+    r"`(?:pytest|pip|docker|git|npm)\b[^`]*?((?:--[A-Za-z][\w-]*|-h|-V))[^`]*`",
+    re.I,
+)
 
 
 def _is_tutorial_file_instruction(line: str, path: str) -> bool:
@@ -213,6 +217,10 @@ def extract_markdown(text: str, document_path: str, root: Path | None = None) ->
                 expected = _expected(kind, match)
                 add_claim(kind, subject, expected, line, line_no, match.start(),
                           match.end(), match.group(0))
+
+        for match in _THIRD_PARTY_COMMAND_FLAG.finditer(line):
+            add_claim(ClaimType.CLI_FLAG, match.group(1), {}, line, line_no,
+                      match.start(), match.end(), match.group(0))
 
         for match in _INLINE_DEFAULT.finditer(line):
             raw_value = (match.group(2) or match.group(3) or "").strip()

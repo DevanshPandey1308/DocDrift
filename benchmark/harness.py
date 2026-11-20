@@ -24,6 +24,7 @@ from docdrift_cli.main import main as cli_main
 
 
 SCHEMA_VERSION = 1
+GENERATOR_VERSION = 2
 ROOT = Path(__file__).resolve().parent.parent
 DEFAULT_DATASET = ROOT / "benchmark/datasets/synthetic"
 DEFAULT_OUT = ROOT / "benchmark/results/latest"
@@ -59,6 +60,12 @@ DECOY_TEMPLATES = (
     "| timeout: {value} -> {other} |",
     "Another package's `legacy_fetch(timeout={other})` uses the same parameter name.",
     "Legacy notes say timeout changed from {value} to {other}.",
+)
+THIRD_PARTY_DECOYS = (
+    ("cli_flag", "--cov", "Run `pytest --cov` to measure coverage."),
+    ("environment_variable", "HTTP_PROXY", "Set `HTTP_PROXY` to use a proxy."),
+    ("cli_flag", "pip", "Run `pip install -e .` to install the project."),
+    ("cli_flag", "docker", "Use `docker run --rm` for a disposable container."),
 )
 
 
@@ -181,7 +188,8 @@ def _choose_mutations(rng: random.Random, forced: Iterable[str] | None) -> list[
 
 
 def generate_case(dataset_root: Path, case_number: int, rng: random.Random,
-                  forced_mutations: Iterable[str] | None = None) -> dict[str, Any]:
+                  forced_mutations: Iterable[str] | None = None,
+                  *, decoy_rng: random.Random | None = None) -> dict[str, Any]:
     case_id = f"case-{case_number:04d}"
     case_dir = dataset_root / case_id
     repo = case_dir / "repo"
@@ -195,6 +203,13 @@ def generate_case(dataset_root: Path, case_number: int, rng: random.Random,
     path = f"reference/data-{case_number:03d}.txt"
     statements = _make_statements(case_number, rng, timeout, retries, flag, env_name,
                                   path, version, route, 0)
+    separate_decoy_rng = decoy_rng or random.Random(case_number + 1)
+    decoy_statements = [
+        StatementSpec(claim_type, "decoy_third_party", "decoy", subject, text)
+        for claim_type, subject, text in THIRD_PARTY_DECOYS
+    ]
+    separate_decoy_rng.shuffle(decoy_statements)
+    statements.extend(decoy_statements)
     selected = _choose_mutations(rng, forced_mutations)
     mutations: dict[str, object] = {}
     for operator in selected:
@@ -276,6 +291,7 @@ def generate_case(dataset_root: Path, case_number: int, rng: random.Random,
     _write_text(repo / "docs/README.md", "\n".join(doc_lines) + "\n")
     manifest = {
         "schema_version": SCHEMA_VERSION,
+        "generator_version": GENERATOR_VERSION,
         "case_id": case_id,
         "mutated": bool(mutations),
         "statements": manifest_statements,
@@ -293,12 +309,15 @@ def generate_dataset(dataset_root: Path, seed: int = 1337, repos: int = 60) -> l
         shutil.rmtree(target)
     target.mkdir(parents=True, exist_ok=True)
     rng = random.Random(seed)
-    return [generate_case(target, number, rng) for number in range(repos)]
+    decoy_rng = random.Random(seed + 1)
+    return [generate_case(target, number, rng, decoy_rng=decoy_rng) for number in range(repos)]
 
 
 def validate_manifest(case_dir: Path, manifest: dict[str, Any]) -> None:
     if manifest.get("schema_version") != SCHEMA_VERSION:
         raise ValueError(f"unsupported manifest schema in {case_dir}")
+    if manifest.get("generator_version") != GENERATOR_VERSION:
+        raise ValueError(f"unsupported benchmark generator in {case_dir}")
     repo = case_dir / "repo"
     for statement in manifest.get("statements", []):
         path = Path(statement["path"])
@@ -550,6 +569,26 @@ def _group_metrics(rows: list[dict[str, Any]], key: str, verdict_key: str = "ver
     return {name: metrics(groups[name], verdict_key) for name in sorted(groups)}
 
 
+def _claim_category_metrics(rows: list[dict[str, Any]]) -> dict[str, dict[str, dict[str, Any]]]:
+    grouped: dict[str, dict[str, list[dict[str, Any]]]] = defaultdict(lambda: defaultdict(list))
+    for row in rows:
+        grouped[str(row.get("claim_type") or "none")][str(row.get("category") or "none")].append(row)
+    return {
+        claim_type: {category: metrics(items) for category, items in sorted(categories.items())}
+        for claim_type, categories in sorted(grouped.items())
+    }
+
+
+def _claim_label_metrics(rows: list[dict[str, Any]]) -> dict[str, dict[str, dict[str, Any]]]:
+    grouped: dict[str, dict[str, list[dict[str, Any]]]] = defaultdict(lambda: defaultdict(list))
+    for row in rows:
+        grouped[str(row.get("claim_type") or "none")][str(row.get("label") or "none")].append(row)
+    return {
+        claim_type: {label: metrics(items) for label, items in sorted(labels.items())}
+        for claim_type, labels in sorted(grouped.items())
+    }
+
+
 def _operator_metrics(rows: list[dict[str, Any]], verdict_key: str = "verdict") -> dict[str, dict[str, Any]]:
     cases_by_operator: dict[str, set[str]] = defaultdict(set)
     for row in rows:
@@ -603,6 +642,8 @@ def run_benchmark(dataset_root: Path, out: Path, *, seed: int | None = None,
     engine = {
         "overall": metrics(all_rows),
         "per_claim_type": _group_metrics(all_rows, "claim_type"),
+        "per_claim_type_category": _claim_category_metrics(all_rows),
+        "per_claim_type_label": _claim_label_metrics(all_rows),
         "per_category": _group_metrics(all_rows, "category"),
         "per_operator": _operator_metrics(all_rows),
     }

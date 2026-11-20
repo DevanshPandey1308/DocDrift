@@ -21,6 +21,115 @@ def _funcs(claim: Claim, index: CodeIndex) -> list[FunctionInfo]:
     return index.functions.get(claim.subject, [])
 
 
+_THIRD_PARTY_COMMAND = re.compile(r"\b(?:pytest|pip|docker|git|npm)\b", re.I)
+_HISTORICAL_FRAMING = re.compile(
+    r"\b(?:was|used\s+to|previously|formerly|deprecated)\b|"
+    r"\bin\s+v\d+(?:\.\d+)*\b|->|→",
+    re.I,
+)
+_NEGATED_FRAMING = re.compile(
+    r"\b(?:not|never|no\s+longer|does\s+not|doesn't|do\s+not|don't|"
+    r"is\s+not|isn't|are\s+not|aren't|cannot|can't|without)\b",
+    re.I,
+)
+_FOREIGN_PACKAGE_FRAMING = re.compile(
+    r"\b(?:another|different|other)\s+(?:project|package|module|library)\b",
+    re.I,
+)
+_ABSENCE_FLAGS = {"--help", "-h", "--version", "-V"}
+
+
+def _edit_distance(left: str, right: str, limit: int = 3) -> int:
+    if abs(len(left) - len(right)) > limit:
+        return limit + 1
+    previous = list(range(len(right) + 1))
+    for row, left_char in enumerate(left, 1):
+        current = [row]
+        for column, right_char in enumerate(right, 1):
+            current.append(min(
+                current[-1] + 1,
+                previous[column] + 1,
+                previous[column - 1] + (left_char != right_char),
+            ))
+        if min(current) > limit:
+            return limit + 1
+        previous = current
+    return previous[-1]
+
+
+def _normalized_flag(flag: str) -> tuple[str, tuple[str, ...]]:
+    body = flag.lstrip("-").casefold()
+    body = re.sub(r"(?:[-_]?\d+)$", "", body)
+    tokens = tuple(token for token in re.split(r"[-_]", body) if token)
+    return body, tokens
+
+
+def _likely_renamed_flag(claimed: str, declared: str) -> bool:
+    normalized_claim, claim_tokens = _normalized_flag(claimed)
+    normalized_declared, declared_tokens = _normalized_flag(declared)
+    if any(len(token) >= 3 for token in set(claim_tokens) & set(declared_tokens)):
+        return True
+    return _edit_distance(normalized_claim, normalized_declared) <= 3
+
+
+def _source_scope_label(index: CodeIndex) -> str:
+    return ", ".join(index.source_scopes) if index.source_scopes else "(no source scope)"
+
+
+def _flag_own_cli_context(claim: Claim, index: CodeIndex) -> bool:
+    if re.search(r"\b(?:the|this)\s+CLI\b|\bcommand\s+line\b", claim.text, re.I):
+        return True
+    names = index.project_script_names | index.parser_programs
+    return any(re.search(rf"(?<![\w.-]){re.escape(name)}(?![\w.-])", claim.text, re.I)
+               for name in names if name)
+
+
+def _check_absent_flag(claim: Claim, index: CodeIndex) -> Finding:
+    flag = claim.subject
+    scope = _source_scope_label(index)
+    if flag in _ABSENCE_FLAGS:
+        return _finding(claim, Verdict.UNVERIFIABLE,
+                        f"Built-in flag {flag} is not checked for absence in scanned scope {scope}.")
+    if _THIRD_PARTY_COMMAND.search(claim.text):
+        return _finding(claim, Verdict.UNVERIFIABLE,
+                        f"The command is third-party context; DocDrift does not infer its flags from scanned scope {scope}.")
+    if not index.cli_declarations:
+        return _finding(claim, Verdict.UNVERIFIABLE,
+                        f"No recognized CLI declaration was found in scanned source scope {scope}.")
+    if index.dynamic_cli_declarations:
+        return _finding(claim, Verdict.UNVERIFIABLE,
+                        f"A computed or dynamically declared CLI flag prevents absence checks in scanned scope {scope}.")
+    if not index.source_text_complete:
+        return _finding(claim, Verdict.UNVERIFIABLE,
+                        f"Source text could not be read completely in scanned scope {scope}.")
+    if any(flag in text for text in index.source_text_files.values()):
+        return _finding(claim, Verdict.UNVERIFIABLE,
+                        f"The flag text appears in scanned source scope {scope}, but no declaration was indexed.")
+    near = [
+        (declared, info)
+        for declared, declarations in index.flags.items()
+        for info in declarations
+        if not info.dynamic and _likely_renamed_flag(flag, declared)
+    ]
+    near.sort(key=lambda item: (
+        _edit_distance(_normalized_flag(flag)[0], _normalized_flag(item[0])[0]),
+        item[0], item[1].path, item[1].line,
+    ))
+    contextual = _flag_own_cli_context(claim, index)
+    if not near and not contextual:
+        return _finding(claim, Verdict.UNVERIFIABLE,
+                        f"No declaration found for {flag}; claim lacks project CLI context in scanned scope {scope}.")
+    evidence: tuple[Evidence, ...] = ()
+    if near:
+        source = index.evidence(near[0][1].path, near[0][1].line)
+        evidence = (source,) if source else ()
+    explanation = (
+        f"No declaration found for {flag}; scanned source scope {scope}."
+        if not evidence else f"No declaration found for {flag}; likely renamed declaration {near[0][0]} is shown."
+    )
+    return _finding(claim, Verdict.FALSE, explanation, evidence, "static_cli_absence")
+
+
 def _source_complete(index: CodeIndex) -> bool:
     return not index.errors
 
@@ -156,7 +265,7 @@ def check_flag(claim: Claim, index: CodeIndex) -> Finding:
         return _finding(claim, Verdict.UNVERIFIABLE, "Python source indexing was incomplete; flag presence cannot be established.")
     flags = index.flags.get(claim.subject, [])
     if not flags:
-        return _finding(claim, Verdict.UNVERIFIABLE, "No statically resolved declaration of this flag was found.")
+        return _check_absent_flag(claim, index)
     if len(flags) != 1 or any(f.dynamic for f in flags):
         return _finding(claim, Verdict.UNVERIFIABLE, "Flag declaration is ambiguous or dynamically configured.")
     flag = flags[0]
@@ -166,11 +275,39 @@ def check_flag(claim: Claim, index: CodeIndex) -> Finding:
 
 
 def check_route(claim: Claim, index: CodeIndex) -> Finding:
-    if not _source_complete(index) or not index.routes_complete:
-        return _finding(claim, Verdict.UNVERIFIABLE, "Route indexing was incomplete because a declaration or URL prefix could not be resolved.", method="static_python_route")
     routes = index.routes.get(claim.subject, [])
+    expected_method = str(claim.expected.get("method", "")).upper()
+    exact = [route for route in routes if route.method == expected_method and not route.dynamic]
+    if exact:
+        route = sorted(exact, key=lambda item: (item.source_path, item.line))[0]
+        evidence = index.evidence(route.source_path, route.line)
+        ev = (evidence,) if evidence else ()
+        return _finding(claim, Verdict.TRUE,
+                        f"A static {expected_method} route declaration matches {route.path}.",
+                        ev, "static_python_route")
+    if not _source_complete(index) or not index.routes_complete:
+        return _finding(claim, Verdict.UNVERIFIABLE,
+                        "Route indexing was incomplete because a declaration or URL prefix could not be resolved.",
+                        method="static_python_route")
+    indexed_routes = [route for path_routes in index.routes.values() for route in path_routes if not route.dynamic]
+    if not indexed_routes:
+        return _finding(claim, Verdict.UNVERIFIABLE,
+                        f"No statically indexed route declaration exists in scanned source scope {_source_scope_label(index)}.",
+                        method="static_python_route")
     if not routes:
-        return _finding(claim, Verdict.UNVERIFIABLE, "No unambiguous static route declaration matches this path.", method="static_python_route")
+        nearest = sorted(
+            indexed_routes,
+            key=lambda item: (item.method != expected_method,
+                              _edit_distance(item.path, claim.subject, max(len(item.path), len(claim.subject))),
+                              item.source_path, item.line),
+        )[0]
+        evidence = index.evidence(nearest.source_path, nearest.line)
+        ev = (evidence,) if evidence else ()
+        explanation = (
+            f"No {expected_method} {claim.subject} route declaration was found in scanned source scope {_source_scope_label(index)}."
+            if not ev else f"No {expected_method} {claim.subject} route was found; nearest indexed route is {nearest.method} {nearest.path}."
+        )
+        return _finding(claim, Verdict.FALSE, explanation, ev, "static_python_route_absence")
     declarations: dict[tuple[str, int], list[RouteInfo]] = {}
     for route in routes:
         declarations.setdefault((route.source_path, route.line), []).append(route)
@@ -180,7 +317,6 @@ def check_route(claim: Claim, index: CodeIndex) -> Finding:
     route = declaration[0]
     evidence = index.evidence(route.source_path, route.line)
     ev = (evidence,) if evidence else ()
-    expected_method = str(claim.expected.get("method", "")).upper()
     methods = sorted({item.method for item in declaration})
     if expected_method in methods:
         return _finding(claim, Verdict.TRUE, f"A static {expected_method} route declaration matches {route.path}.", ev, "static_python_route")
@@ -191,9 +327,36 @@ def check_env(claim: Claim, index: CodeIndex) -> Finding:
     if not _source_complete(index):
         return _finding(claim, Verdict.UNVERIFIABLE, "Python source indexing was incomplete; environment reads may be missing.")
     evidence = index.environment.get(claim.subject, [])
-    if not evidence:
-        return _finding(claim, Verdict.UNVERIFIABLE, "No recognized static read of this environment variable was found.")
-    return _finding(claim, Verdict.TRUE, f"A recognized source read references {claim.subject}; this does not prove it is required.", tuple(evidence), "static_environment_read")
+    if evidence:
+        return _finding(claim, Verdict.TRUE, f"A recognized source read references {claim.subject}; this does not prove it is required.", tuple(evidence), "static_environment_read")
+    scope = _source_scope_label(index)
+    if not index.environment_text_complete:
+        return _finding(claim, Verdict.UNVERIFIABLE,
+                        f"Environment source text could not be read completely in scanned scope {scope}.")
+    name_pattern = re.compile(rf"(?<![A-Za-z0-9_]){re.escape(claim.subject)}(?![A-Za-z0-9_])")
+    if any(name_pattern.search(text) for text in index.environment_text_files.values()):
+        return _finding(claim, Verdict.UNVERIFIABLE,
+                        f"The environment name appears in scanned text but has no recognized literal read in scope {scope}.")
+    if index.dynamic_environment_access:
+        return _finding(claim, Verdict.UNVERIFIABLE,
+                        f"Dynamic environment access prevents an absence check in scanned source scope {scope}.")
+    prefix = claim.subject.split("_", 1)[0]
+    owned_names = {name for name in index.environment if name.split("_", 1)[0] == prefix}
+    if len(prefix) < 3 or len(owned_names) < 2:
+        return _finding(claim, Verdict.UNVERIFIABLE,
+                        f"No recognized read of {claim.subject}; no project-owned environment namespace is established in scope {scope}.")
+    alternates = sorted(
+        ((name, item) for name in owned_names for item in index.environment[name]),
+        key=lambda pair: (_edit_distance(claim.subject, pair[0], max(len(claim.subject), len(pair[0]))),
+                          pair[0], pair[1].path, pair[1].line),
+    )
+    near = alternates[0][1] if alternates else None
+    ev = (near,) if near else ()
+    explanation = (
+        f"No declaration found for environment variable {claim.subject}; scanned environment text scope {scope}."
+        if not ev else f"No read of {claim.subject} was found; nearby project-owned read {alternates[0][0]} is shown."
+    )
+    return _finding(claim, Verdict.FALSE, explanation, ev, "static_environment_absence")
 
 
 def check_path(claim: Claim, index: CodeIndex) -> Finding:
@@ -282,6 +445,13 @@ REGISTRY: dict[ClaimType, Checker] = {
 
 
 def check_claim(claim: Claim, index: CodeIndex) -> Finding:
+    if _HISTORICAL_FRAMING.search(claim.text) or _NEGATED_FRAMING.search(claim.text):
+        return _finding(claim, Verdict.UNVERIFIABLE,
+                        "Historical, negated, deprecated, or change-arrow framing cannot be verified as a positive current claim.")
+    if (claim.type in {ClaimType.DEFAULT, ClaimType.FUNCTION}
+            and _FOREIGN_PACKAGE_FRAMING.search(claim.text)):
+        return _finding(claim, Verdict.UNVERIFIABLE,
+                        "The documented function or parameter is attributed to another project or package.")
     checker = REGISTRY.get(claim.type)
     if checker is None:
         return _finding(claim, Verdict.UNVERIFIABLE, "No checker is registered for this claim type.")
