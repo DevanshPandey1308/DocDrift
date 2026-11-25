@@ -1,0 +1,23 @@
+case_id,path,line,text,label,claim_type,category,verdict,reason
+case-0000,docs/README.md,14,"By default, calls time out after 75 seconds.",drifted,default_value,unsupported_prose,none,not_extracted
+case-0000,docs/README.md,15,`timeout` is set to 75 unless overridden.,drifted,default_value,paraphrase_named,none,not_extracted
+case-0001,docs/README.md,14,Retries are capped at 6.,drifted,default_value,unsupported_prose,none,not_extracted
+case-0009,docs/README.md,14,A client normally waits for 62 seconds.,drifted,default_value,unsupported_prose,none,not_extracted
+case-0018,docs/README.md,14,"By default, calls time out after 41 seconds.",drifted,default_value,unsupported_prose,none,not_extracted
+case-0018,docs/README.md,15,`timeout` takes a value of 41 in normal deployments.,drifted,default_value,paraphrase_named,none,not_extracted
+case-0030,docs/README.md,14,"By default, calls time out after 60 seconds.",drifted,default_value,unsupported_prose,none,not_extracted
+case-0030,docs/README.md,15,`timeout` takes a value of 60 in normal deployments.,drifted,default_value,paraphrase_named,none,not_extracted
+case-0035,docs/README.md,14,The timeout is typically around 19 seconds.,drifted,default_value,unsupported_prose,none,not_extracted
+case-0035,docs/README.md,15,The recommended `timeout` value is 19.,drifted,default_value,paraphrase_named,none,not_extracted
+case-0037,docs/README.md,15,`timeout` is set to 49 unless overridden.,drifted,default_value,paraphrase_named,none,not_extracted
+case-0041,docs/README.md,14,The timeout is typically around 85 seconds.,drifted,default_value,unsupported_prose,none,not_extracted
+case-0041,docs/README.md,15,"For typical use, keep `timeout` at 85.",drifted,default_value,paraphrase_named,none,not_extracted
+case-0042,docs/README.md,14,"By default, calls time out after 82 seconds.",drifted,default_value,unsupported_prose,none,not_extracted
+case-0042,docs/README.md,15,`timeout` takes a value of 82 in normal deployments.,drifted,default_value,paraphrase_named,none,not_extracted
+case-0044,docs/README.md,15,Most configurations leave `retries` as 7.,drifted,default_value,paraphrase_named,none,not_extracted
+case-0046,docs/README.md,14,Calls typically repeat 5 times.,drifted,default_value,unsupported_prose,none,not_extracted
+case-0046,docs/README.md,15,The recommended `timeout` value is 76.,drifted,default_value,paraphrase_named,none,not_extracted
+case-0047,docs/README.md,14,The timeout is typically around 22 seconds.,drifted,default_value,unsupported_prose,none,not_extracted
+case-0047,docs/README.md,15,The recommended `timeout` value is 22.,drifted,default_value,paraphrase_named,none,not_extracted
+case-0055,docs/README.md,14,Retries are capped at 6.,drifted,default_value,unsupported_prose,none,not_extracted
+case-0055,docs/README.md,15,`timeout` takes a value of 76 in normal deployments.,drifted,default_value,paraphrase_named,none,not_extracted

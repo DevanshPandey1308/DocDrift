@@ -1,0 +1,19 @@
+case_id,path,line,text,label,claim_type,category,verdict,reason
+case-0000,docs/README.md,14,"By default, calls time out after 83 seconds.",drifted,default_value,unsupported_prose,none,not_extracted
+case-0000,docs/README.md,15,`timeout` is set to 83 unless overridden.,drifted,default_value,paraphrase_named,none,not_extracted
+case-0002,docs/README.md,15,Pass `retries=5` for the usual behaviour.,drifted,default_value,paraphrase_named,none,not_extracted
+case-0008,docs/README.md,15,Most configurations leave `retries` as 7.,drifted,default_value,paraphrase_named,none,not_extracted
+case-0012,docs/README.md,14,"By default, calls time out after 60 seconds.",drifted,default_value,unsupported_prose,none,not_extracted
+case-0012,docs/README.md,15,`timeout` is set to 60 unless overridden.,drifted,default_value,paraphrase_named,none,not_extracted
+case-0015,docs/README.md,14,A client normally waits for 54 seconds.,drifted,default_value,unsupported_prose,none,not_extracted
+case-0018,docs/README.md,14,"By default, calls time out after 46 seconds.",drifted,default_value,unsupported_prose,none,not_extracted
+case-0018,docs/README.md,15,`timeout` takes a value of 46 in normal deployments.,drifted,default_value,paraphrase_named,none,not_extracted
+case-0021,docs/README.md,15,Most configurations leave `retries` as 7.,drifted,default_value,paraphrase_named,none,not_extracted
+case-0023,docs/README.md,14,The timeout is typically around 88 seconds.,drifted,default_value,unsupported_prose,none,not_extracted
+case-0023,docs/README.md,15,The recommended `timeout` value is 88.,drifted,default_value,paraphrase_named,none,not_extracted
+case-0028,docs/README.md,14,Calls typically repeat 2 times.,drifted,default_value,unsupported_prose,none,not_extracted
+case-0028,docs/README.md,15,"For typical use, keep `timeout` at 22.",drifted,default_value,paraphrase_named,none,not_extracted
+case-0043,docs/README.md,15,`timeout` takes a value of 82 in normal deployments.,drifted,default_value,paraphrase_named,none,not_extracted
+case-0048,docs/README.md,14,"By default, calls time out after 24 seconds.",drifted,default_value,unsupported_prose,none,not_extracted
+case-0048,docs/README.md,15,`timeout` is set to 24 unless overridden.,drifted,default_value,paraphrase_named,none,not_extracted
+case-0052,docs/README.md,15,"For typical use, keep `timeout` at 87.",drifted,default_value,paraphrase_named,none,not_extracted

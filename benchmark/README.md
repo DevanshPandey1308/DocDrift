@@ -33,9 +33,11 @@ use temporary datasets or output directories. `check` also accepts `--out`.
 
 ## Dataset format (schema version 1)
 
-Generator version 2 preserves the original seeded statements and appends four
+Generator version 3 preserves the original seeded statements and appends four
 third-party decoy commands from an independent `Random(seed + 1)` stream. The
-same decoys occur in mutated and unmutated controls. Each case has a normal
+new `delete_directory` mutation uses an independent `Random(seed + 2)` stream
+so it does not perturb existing seeded statement values or the v2 mutation
+stream. The same decoys occur in mutated and unmutated controls. Each case has a normal
 repository tree and a manifest:
 
 ```text
@@ -49,7 +51,7 @@ The manifest is UTF-8 JSON with this shape:
 ```json
 {
   "schema_version": 1,
-  "generator_version": 2,
+  "generator_version": 3,
   "case_id": "case-0000",
   "mutated": false,
   "statements": [
@@ -77,6 +79,14 @@ for a drifted statement; otherwise it is null. A v2 case has 18 statements
 with one statement per line: the original 14 plus four third-party decoys,
 including `pytest --cov`, `HTTP_PROXY`, `pip install -e .`, and
 `docker run --rm`. Hand-mined real-repository cases can use the same schema.
+
+The `delete_file` operator leaves its `reference/` parent directory in place,
+adding a sibling README when needed. In v2, deletion removed the only file in
+that directory, so the parent disappeared and did not model a typical file
+deletion. The separate `delete_directory` operator removes the full directory
+that contained the referenced file. It is recorded as drifted; the current
+engine is expected to abstain on that unanchored path, so its recall is
+reported separately from the hard `delete_file` recall gate.
 
 The seeded generator includes at least six phrase templates each for
 unsupported prose, named paraphrases, and the original decoys. Roughly 35% of generated

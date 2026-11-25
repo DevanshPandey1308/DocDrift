@@ -5,7 +5,7 @@ from __future__ import annotations
 import ast
 import re
 from collections.abc import Callable
-from pathlib import PurePosixPath
+from pathlib import Path, PurePosixPath
 
 from .index import CodeIndex, FunctionInfo, RouteInfo
 from .models import Claim, ClaimType, Evidence, Finding, Verdict
@@ -37,6 +37,53 @@ _FOREIGN_PACKAGE_FRAMING = re.compile(
     re.I,
 )
 _ABSENCE_FLAGS = {"--help", "-h", "--version", "-V"}
+_PATH_EXTENSIONS = {
+    ".py", ".md", ".markdown", ".rst", ".txt", ".toml", ".cfg", ".ini",
+    ".yml", ".yaml", ".json", ".js", ".jsx", ".ts", ".tsx", ".html",
+    ".css", ".scss", ".sh", ".lock", ".xml", ".csv", ".sql", ".go",
+    ".rs", ".java", ".kt", ".c", ".h", ".cpp", ".conf", ".service",
+}
+_PATH_OUTPUT_SEGMENTS = {
+    "site", "dist", "build", "_build", "public", "out", "target",
+    "node_modules", ".venv", "htmlcov",
+}
+_PATH_HISTORY_SEGMENTS = {
+    "news", "changelog", "changes", "history", "release", "releases",
+    "whatsnew", "migration", "migrations", "upgrade", "upgrades",
+}
+_PATH_GENERIC_BASENAMES = {
+    "main", "app", "index", "init", "__init__", "setup", "conf", "config",
+    "settings", "version", "__version__", "utils", "util", "manage", "wsgi",
+    "asgi", "hello", "example", "demo", "test", "tests", "readme", "license",
+    "makefile", "dockerfile",
+}
+_PATH_TUTORIAL_SEGMENTS = {
+    "tutorial", "tutorials", "guide", "guides", "user-guide", "quickstart",
+    "getting-started", "howto", "howtos", "cookbook", "example", "examples", "learn",
+}
+_PATH_PLACEHOLDERS = {"my", "your", "example", "foo", "bar", "project", "myproject", "myapp"}
+_PATH_INSTRUCTION_FRAMING = re.compile(
+    r"\b(?:for\s+example|e\.g\.|such\s+as|your|you\s+create|create\s+a|create\s+the|"
+    r"working\s+directory|current\s+directory|will\s+be\s+created|generated|output|"
+    r"default\s+location|contents\s+of)\b",
+    re.IGNORECASE,
+)
+_PATH_DIRECT_CREATION = re.compile(r"\bcreate\s+`{1,2}[^`]+`{1,2}", re.IGNORECASE)
+_PYTHON_PROJECT_CUE = re.compile(
+    r"\b(?:requires?|supports?|compatible|minimum|at\s+least|works\s+with|tested\s+on|"
+    r"runs\s+on|install|needs)\b",
+    re.IGNORECASE,
+)
+_PYTHON_FEATURE_CONTEXT = re.compile(
+    r"\b(?:feature|setting|option|parameter|argument|field|target[- ]versions?|"
+    r"type\s+declarations?)\b",
+    re.IGNORECASE,
+)
+_PYTHON_INTERACTIVE_USAGE = re.compile(
+    r"\b(?:use|try)\b.{0,100}\bPython\s+\d+(?:\.\d+){1,2}.{0,120}"
+    r"\b(?:interactively|to\s+try\s+this\s+code|console)\b",
+    re.IGNORECASE,
+)
 
 
 def _edit_distance(left: str, right: str, limit: int = 3) -> int:
@@ -74,6 +121,16 @@ def _likely_renamed_flag(claimed: str, declared: str) -> bool:
 
 def _source_scope_label(index: CodeIndex) -> str:
     return ", ".join(index.source_scopes) if index.source_scopes else "(no source scope)"
+
+
+def _historical_document(claim: Claim) -> bool:
+    segments = [
+        token
+        for segment in PurePosixPath(claim.document_path.casefold()).parts
+        for token in re.split(r"[^a-z0-9]+", PurePosixPath(segment).stem)
+        if token
+    ]
+    return any(segment in _PATH_HISTORY_SEGMENTS for segment in segments)
 
 
 def _flag_own_cli_context(claim: Claim, index: CodeIndex) -> bool:
@@ -360,7 +417,8 @@ def check_env(claim: Claim, index: CodeIndex) -> Finding:
 
 
 def check_path(claim: Claim, index: CodeIndex) -> Finding:
-    candidate = PurePosixPath(claim.subject)
+    subject = claim.subject.replace("\\", "/")
+    candidate = PurePosixPath(subject)
     if candidate.is_absolute():
         return _finding(claim, Verdict.UNVERIFIABLE, "Repository path is absolute.", method="repository_path")
     # Relative parent references are allowed only when they resolve inside the
@@ -376,13 +434,25 @@ def check_path(claim: Claim, index: CodeIndex) -> Finding:
         if current == index.root:
             break
         current = current.parent
+
+    # A path cited in changelog or release history is not a claim about the
+    # repository's current file layout.
+    if _historical_document(claim):
+        return _finding(
+            claim,
+            Verdict.UNVERIFIABLE,
+            "Path reference appears in a historical document.",
+            method="repository_path",
+        )
+
     for base in bases:
-        resolved = (base / str(candidate)).resolve()
+        resolved = (base / subject).resolve()
         if not resolved.is_relative_to(index.root):
             continue
         if resolved.is_file() or resolved.is_dir():
             if resolved.is_dir():
                 return _finding(claim, Verdict.TRUE, "Referenced repository directory exists.", method="repository_path")
+            ev: tuple[Evidence, ...]
             try:
                 line = resolved.read_text(encoding="utf-8").splitlines()[0].strip()
                 ev = (Evidence(resolved.relative_to(index.root).as_posix(), 1, line),) if line else (Evidence(resolved.relative_to(index.root).as_posix(), 1, ""),)
@@ -390,18 +460,198 @@ def check_path(claim: Claim, index: CodeIndex) -> Finding:
                 ev = ()
             return _finding(claim, Verdict.TRUE, "Referenced repository file exists.", ev, "repository_path")
 
-    suffix = str(candidate).replace("\\", "/").rstrip("/")
-    matches = sorted(path for path in index.scanned_paths if path == suffix or path.endswith("/" + suffix))
-    if len(matches) == 1:
-        return _finding(claim, Verdict.UNVERIFIABLE,
-                        "Path resolves only relative to another directory.", method="repository_path")
     if traversal:
         return _finding(claim, Verdict.UNVERIFIABLE,
                         "Relative path does not resolve within the repository.", method="repository_path")
-    return _finding(claim, Verdict.FALSE, "Referenced repository path does not exist.", method="repository_path")
+
+    path_parts = tuple(part.casefold() for part in candidate.parts if part not in {"", "."})
+    if any(part in _PATH_OUTPUT_SEGMENTS for part in path_parts):
+        return _finding(
+            claim,
+            Verdict.UNVERIFIABLE,
+            "Path is under a conventional build or output location.",
+            method="repository_path",
+        )
+    leading_stem = PurePosixPath(path_parts[0]).stem if path_parts else ""
+    placeholder_path = (
+        bool(path_parts)
+        and (path_parts[0] in _PATH_PLACEHOLDERS or leading_stem in _PATH_PLACEHOLDERS)
+    ) or path_parts[:2] == ("path", "to")
+    if placeholder_path:
+        return _finding(
+            claim,
+            Verdict.UNVERIFIABLE,
+            "Path begins with a reader-example placeholder.",
+            method="repository_path",
+        )
+    if _PATH_INSTRUCTION_FRAMING.search(claim.text) or _PATH_DIRECT_CREATION.search(claim.text):
+        return _finding(
+            claim,
+            Verdict.UNVERIFIABLE,
+            "Path is mentioned in an example or file-creation instruction.",
+            method="repository_path",
+        )
+    if any(char in subject for char in ("$", "~", "%", "{", "<", "*")) or "://" in subject:
+        return _finding(
+            claim,
+            Verdict.UNVERIFIABLE,
+            "Path contains a variable, template, wildcard, or URL marker.",
+            method="repository_path",
+        )
+    if re.match(r"^(?:ghcr\.io|docker\.io|quay\.io|gcr\.io)(?:/|$)", subject, re.IGNORECASE):
+        return _finding(
+            claim,
+            Verdict.UNVERIFIABLE,
+            "Path may be a container image or registry reference.",
+            method="repository_path",
+        )
+    if re.search(r":[^/:]+$", subject):
+        return _finding(
+            claim,
+            Verdict.UNVERIFIABLE,
+            "Path has a tag-like suffix and may be an image or package reference.",
+            method="repository_path",
+        )
+
+    normalized_path = subject.rstrip("/")
+    extension = PurePosixPath(normalized_path).suffix.casefold()
+    known_extension = (
+        extension in _PATH_EXTENSIONS
+        or PurePosixPath(normalized_path).name.casefold() == ".env"
+    )
+    first_segment = next((part for part in candidate.parts if part not in {"", "."}), "")
+    first_directory = (index.root / first_segment).resolve() if first_segment else index.root
+    directory_reference = (
+        subject.endswith("/")
+        and bool(path_parts)
+        and first_directory.is_relative_to(index.root)
+        and first_directory.is_dir()
+    )
+    if not known_extension and not directory_reference:
+        if (len(path_parts) == 2 and re.fullmatch(r"[\w.-]+/[\w.-]+", "/".join(path_parts))):
+            return _finding(claim, Verdict.UNVERIFIABLE,
+                            "Slash-separated token may be an image, action, or package name.",
+                            method="repository_path")
+        return _finding(claim, Verdict.UNVERIFIABLE,
+                        "Path has no recognized file extension or repository-directory form.",
+                        method="repository_path")
+
+    # A missing path is actionable only when its first directory is anchored to
+    # the scan root or the nearest package root surrounding the document.
+    first_segment = next((part for part in candidate.parts if part not in {"", "."}), "")
+    package_root = next(
+        (directory for directory in bases
+         if (directory / "pyproject.toml").is_file()),
+        None,
+    )
+    anchor_roots = [index.root]
+    if package_root is not None and package_root != index.root:
+        anchor_roots.append(package_root)
+    anchored_roots = [
+        base for base in anchor_roots
+        if first_segment
+        and (directory := (base / first_segment).resolve()).is_relative_to(index.root)
+        and directory.is_dir()
+    ]
+    if not anchored_roots:
+        return _finding(claim, Verdict.UNVERIFIABLE,
+                        "Unanchored filename: its first path segment is not a repository directory.",
+                        method="repository_path")
+
+    # A basename elsewhere is move evidence only when it is both unique and
+    # specific enough to identify this file rather than a common project name.
+    basename = PurePosixPath(normalized_path).name.casefold()
+    basename_stem = PurePosixPath(basename).stem
+    document_segments = {
+        segment.casefold()
+        for segment in PurePosixPath(claim.document_path).parts
+    }
+    tutorial_document = bool(document_segments & _PATH_TUTORIAL_SEGMENTS)
+    moved = sorted(
+        path for path in index.scanned_paths
+        if PurePosixPath(path).name.casefold() == basename
+        and (index.root / path).is_file()
+    )
+    if len(moved) == 1 and (basename_stem in _PATH_GENERIC_BASENAMES or tutorial_document):
+        return _finding(
+            claim,
+            Verdict.UNVERIFIABLE,
+            "A same-named file is not reliable move evidence for this generic name or tutorial document.",
+            method="repository_path",
+        )
+    if len(moved) == 1 and basename_stem not in _PATH_GENERIC_BASENAMES and not tutorial_document:
+        evidence = index.evidence(moved[0], 1)
+        if evidence:
+            explanation = (
+                f"Referenced path is missing; a file with the same name exists at {moved[0]}."
+            )
+            return _finding(claim, Verdict.FALSE, explanation, (evidence,), "repository_path")
+        return _finding(claim, Verdict.UNVERIFIABLE,
+                        "A possible moved file exists but its evidence could not be read.",
+                        method="repository_path")
+    if len(moved) > 1:
+        return _finding(
+            claim,
+            Verdict.UNVERIFIABLE,
+            "Multiple files share the referenced basename; the move target is ambiguous.",
+            method="repository_path",
+        )
+
+    parent_exists = any(
+        (resolved := (base / subject).resolve()).is_relative_to(index.root)
+        and resolved.parent != index.root
+        and resolved.parent.is_dir()
+        for base in anchored_roots
+    )
+    if not parent_exists:
+        return _finding(claim, Verdict.UNVERIFIABLE,
+                        "The referenced path's parent directory is not present in the repository.",
+                        method="repository_path")
+    return _finding(claim, Verdict.FALSE,
+                    "Referenced repository path does not exist in an existing parent directory.",
+                    method="repository_path")
 
 
 def check_python_version(claim: Claim, index: CodeIndex) -> Finding:
+    text = claim.text
+    if _historical_document(claim):
+        return _finding(
+            claim,
+            Verdict.UNVERIFIABLE,
+            "Python version appears in a historical document, not a current project requirement.",
+            method="python_metadata",
+        )
+    mention_start = claim.span_start
+    depth = 0
+    for char in text[:mention_start]:
+        if char == "(":
+            depth += 1
+        elif char == ")":
+            depth = max(0, depth - 1)
+    in_parenthetical = depth > 0 and ")" in text[claim.span_end:]
+    document_parts = {
+        PurePosixPath(part).stem.casefold()
+        for part in PurePosixPath(claim.document_path).parts
+    }
+    settings_documents = document_parts & {"settings", "configuration", "config"}
+    settings_reference = bool(settings_documents) and (
+        "reference" in document_parts or
+        PurePosixPath(claim.document_path).stem.casefold()
+        in {"settings", "configuration", "config"}
+    )
+    table_line = "|" in text and text.lstrip().startswith("|")
+    option_line = bool(re.match(r"^\s*(?:[-*+]\s+|\d+[.)]\s+)", text))
+    feature_context = bool(_PYTHON_FEATURE_CONTEXT.search(text))
+    if (in_parenthetical or settings_reference or table_line or (option_line and feature_context)
+            or feature_context or _PYTHON_INTERACTIVE_USAGE.search(text)):
+        return _finding(claim, Verdict.UNVERIFIABLE,
+                        "Python version appears in a feature-level or settings-reference note.",
+                        method="python_metadata")
+    if not _PYTHON_PROJECT_CUE.search(text):
+        return _finding(claim, Verdict.UNVERIFIABLE,
+                        "Python version is not stated as a project-level requirement.",
+                        method="python_metadata")
+
     document_parent = (index.root / PurePosixPath(claim.document_path)).parent
     metadata: Path | None = None
     current = document_parent

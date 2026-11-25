@@ -29,7 +29,7 @@ class PrecisionHardeningTests(unittest.TestCase):
                 ("src/existing.py", Verdict.TRUE),
                 ("src/", Verdict.TRUE),
                 ("docs/missing.md", Verdict.FALSE),
-                ("src/missing-name", Verdict.FALSE),
+                ("src/missing-name", Verdict.UNVERIFIABLE),
                 ("web/unique.md", Verdict.UNVERIFIABLE),
                 ("../shared/sibling.md", Verdict.TRUE),
             ],

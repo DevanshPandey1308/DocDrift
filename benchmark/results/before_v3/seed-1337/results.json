@@ -1,0 +1,1303 @@
+{
+  "N1_flag_all_mentions": {
+    "overall": {
+      "F1": 0.228394,
+      "FN": 57,
+      "FP": 443,
+      "TP": 74,
+      "abstain_rate_on_correct": 0.0,
+      "drifted": 131,
+      "extraction_rate": 0.797222,
+      "flagged": 517,
+      "precision": 0.143133,
+      "recall": 0.564885,
+      "statements": 1080
+    },
+    "per_category": {
+      "canonical": {
+        "F1": 0.154341,
+        "FN": 53,
+        "FP": 210,
+        "TP": 24,
+        "abstain_rate_on_correct": 0.0,
+        "drifted": 77,
+        "extraction_rate": 1.0,
+        "flagged": 234,
+        "precision": 0.102564,
+        "recall": 0.311688,
+        "statements": 420
+      },
+      "decoy": {
+        "F1": null,
+        "FN": 0,
+        "FP": 41,
+        "TP": 0,
+        "abstain_rate_on_correct": null,
+        "drifted": 0,
+        "extraction_rate": 0.35,
+        "flagged": 41,
+        "precision": 0.0,
+        "recall": null,
+        "statements": 60
+      },
+      "decoy_third_party": {
+        "F1": null,
+        "FN": 0,
+        "FP": 0,
+        "TP": 0,
+        "abstain_rate_on_correct": null,
+        "drifted": 0,
+        "extraction_rate": 0.75,
+        "flagged": 0,
+        "precision": null,
+        "recall": null,
+        "statements": 240
+      },
+      "natural_supported": {
+        "F1": 0.36,
+        "FN": 0,
+        "FP": 128,
+        "TP": 36,
+        "abstain_rate_on_correct": 0.0,
+        "drifted": 36,
+        "extraction_rate": 1.0,
+        "flagged": 164,
+        "precision": 0.219512,
+        "recall": 1.0,
+        "statements": 240
+      },
+      "paraphrase_named": {
+        "F1": 0.32653,
+        "FN": 3,
+        "FP": 30,
+        "TP": 8,
+        "abstain_rate_on_correct": 0.0,
+        "drifted": 11,
+        "extraction_rate": 0.0,
+        "flagged": 38,
+        "precision": 0.210526,
+        "recall": 0.727273,
+        "statements": 60
+      },
+      "unsupported_prose": {
+        "F1": 0.255319,
+        "FN": 1,
+        "FP": 34,
+        "TP": 6,
+        "abstain_rate_on_correct": 0.0,
+        "drifted": 7,
+        "extraction_rate": 0.0,
+        "flagged": 40,
+        "precision": 0.15,
+        "recall": 0.857143,
+        "statements": 60
+      }
+    },
+    "per_claim_type": {
+      "cli_flag": {
+        "F1": null,
+        "FN": 6,
+        "FP": 35,
+        "TP": 0,
+        "abstain_rate_on_correct": 0.0,
+        "drifted": 6,
+        "extraction_rate": 0.75,
+        "flagged": 35,
+        "precision": 0.0,
+        "recall": 0.0,
+        "statements": 240
+      },
+      "default_value": {
+        "F1": 0.30491,
+        "FN": 4,
+        "FP": 265,
+        "TP": 59,
+        "abstain_rate_on_correct": 0.0,
+        "drifted": 63,
+        "extraction_rate": 0.66875,
+        "flagged": 324,
+        "precision": 0.182099,
+        "recall": 0.936508,
+        "statements": 480
+      },
+      "environment_variable": {
+        "F1": null,
+        "FN": 9,
+        "FP": 32,
+        "TP": 0,
+        "abstain_rate_on_correct": 0.0,
+        "drifted": 9,
+        "extraction_rate": 1.0,
+        "flagged": 32,
+        "precision": 0.0,
+        "recall": 0.0,
+        "statements": 120
+      },
+      "file_path": {
+        "F1": null,
+        "FN": 20,
+        "FP": 21,
+        "TP": 0,
+        "abstain_rate_on_correct": 0.0,
+        "drifted": 20,
+        "extraction_rate": 1.0,
+        "flagged": 21,
+        "precision": 0.0,
+        "recall": 0.0,
+        "statements": 60
+      },
+      "function_signature": {
+        "F1": 0.535715,
+        "FN": 0,
+        "FP": 26,
+        "TP": 15,
+        "abstain_rate_on_correct": 0.0,
+        "drifted": 15,
+        "extraction_rate": 1.0,
+        "flagged": 41,
+        "precision": 0.365854,
+        "recall": 1.0,
+        "statements": 60
+      },
+      "python_version": {
+        "F1": null,
+        "FN": 9,
+        "FP": 32,
+        "TP": 0,
+        "abstain_rate_on_correct": 0.0,
+        "drifted": 9,
+        "extraction_rate": 1.0,
+        "flagged": 32,
+        "precision": 0.0,
+        "recall": 0.0,
+        "statements": 60
+      },
+      "route": {
+        "F1": null,
+        "FN": 9,
+        "FP": 32,
+        "TP": 0,
+        "abstain_rate_on_correct": 0.0,
+        "drifted": 9,
+        "extraction_rate": 1.0,
+        "flagged": 32,
+        "precision": 0.0,
+        "recall": 0.0,
+        "statements": 60
+      }
+    },
+    "per_operator": {
+      "add_param": {
+        "F1": 0.142857,
+        "FN": 0,
+        "FP": 48,
+        "TP": 4,
+        "abstain_rate_on_correct": 0.0,
+        "drifted": 4,
+        "extraction_rate": 0.808824,
+        "flagged": 52,
+        "precision": 0.076923,
+        "recall": 1.0,
+        "statements": 68
+      },
+      "change_default": {
+        "F1": 0.682081,
+        "FN": 0,
+        "FP": 55,
+        "TP": 59,
+        "abstain_rate_on_correct": 0.0,
+        "drifted": 59,
+        "extraction_rate": 0.786667,
+        "flagged": 114,
+        "precision": 0.517544,
+        "recall": 1.0,
+        "statements": 150
+      },
+      "change_requires_python": {
+        "F1": null,
+        "FN": 9,
+        "FP": 105,
+        "TP": 0,
+        "abstain_rate_on_correct": 0.0,
+        "drifted": 9,
+        "extraction_rate": 0.793333,
+        "flagged": 105,
+        "precision": 0.0,
+        "recall": 0.0,
+        "statements": 150
+      },
+      "delete_directory": {
+        "F1": null,
+        "FN": 7,
+        "FP": 81,
+        "TP": 0,
+        "abstain_rate_on_correct": 0.0,
+        "drifted": 7,
+        "extraction_rate": 0.810345,
+        "flagged": 81,
+        "precision": 0.0,
+        "recall": 0.0,
+        "statements": 116
+      },
+      "delete_file": {
+        "F1": null,
+        "FN": 13,
+        "FP": 138,
+        "TP": 0,
+        "abstain_rate_on_correct": 0.0,
+        "drifted": 13,
+        "extraction_rate": 0.793103,
+        "flagged": 138,
+        "precision": 0.0,
+        "recall": 0.0,
+        "statements": 203
+      },
+      "rename_env_read": {
+        "F1": null,
+        "FN": 9,
+        "FP": 93,
+        "TP": 0,
+        "abstain_rate_on_correct": 0.0,
+        "drifted": 9,
+        "extraction_rate": 0.789855,
+        "flagged": 93,
+        "precision": 0.0,
+        "recall": 0.0,
+        "statements": 138
+      },
+      "rename_flag": {
+        "F1": null,
+        "FN": 6,
+        "FP": 62,
+        "TP": 0,
+        "abstain_rate_on_correct": 0.0,
+        "drifted": 6,
+        "extraction_rate": 0.793478,
+        "flagged": 62,
+        "precision": 0.0,
+        "recall": 0.0,
+        "statements": 92
+      },
+      "rename_param": {
+        "F1": 0.165413,
+        "FN": 4,
+        "FP": 107,
+        "TP": 11,
+        "abstain_rate_on_correct": 0.0,
+        "drifted": 15,
+        "extraction_rate": 0.783133,
+        "flagged": 118,
+        "precision": 0.09322,
+        "recall": 0.733333,
+        "statements": 166
+      },
+      "rename_route": {
+        "F1": null,
+        "FN": 9,
+        "FP": 93,
+        "TP": 0,
+        "abstain_rate_on_correct": 0.0,
+        "drifted": 9,
+        "extraction_rate": 0.789855,
+        "flagged": 93,
+        "precision": 0.0,
+        "recall": 0.0,
+        "statements": 138
+      }
+    }
+  },
+  "case_count": 60,
+  "engine": {
+    "overall": {
+      "F1": 0.926229,
+      "FN": 18,
+      "FP": 0,
+      "TP": 113,
+      "abstain_rate_on_correct": 0.0,
+      "drifted": 131,
+      "extraction_rate": 0.797222,
+      "flagged": 113,
+      "precision": 1.0,
+      "recall": 0.862595,
+      "statements": 1080
+    },
+    "per_category": {
+      "canonical": {
+        "F1": 1.0,
+        "FN": 0,
+        "FP": 0,
+        "TP": 77,
+        "abstain_rate_on_correct": 0.0,
+        "drifted": 77,
+        "extraction_rate": 1.0,
+        "flagged": 77,
+        "precision": 1.0,
+        "recall": 1.0,
+        "statements": 420
+      },
+      "decoy": {
+        "F1": null,
+        "FN": 0,
+        "FP": 0,
+        "TP": 0,
+        "abstain_rate_on_correct": null,
+        "drifted": 0,
+        "extraction_rate": 0.35,
+        "flagged": 0,
+        "precision": null,
+        "recall": null,
+        "statements": 60
+      },
+      "decoy_third_party": {
+        "F1": null,
+        "FN": 0,
+        "FP": 0,
+        "TP": 0,
+        "abstain_rate_on_correct": null,
+        "drifted": 0,
+        "extraction_rate": 0.75,
+        "flagged": 0,
+        "precision": null,
+        "recall": null,
+        "statements": 240
+      },
+      "natural_supported": {
+        "F1": 1.0,
+        "FN": 0,
+        "FP": 0,
+        "TP": 36,
+        "abstain_rate_on_correct": 0.0,
+        "drifted": 36,
+        "extraction_rate": 1.0,
+        "flagged": 36,
+        "precision": 1.0,
+        "recall": 1.0,
+        "statements": 240
+      },
+      "paraphrase_named": {
+        "F1": null,
+        "FN": 11,
+        "FP": 0,
+        "TP": 0,
+        "abstain_rate_on_correct": 0.0,
+        "drifted": 11,
+        "extraction_rate": 0.0,
+        "flagged": 0,
+        "precision": null,
+        "recall": 0.0,
+        "statements": 60
+      },
+      "unsupported_prose": {
+        "F1": null,
+        "FN": 7,
+        "FP": 0,
+        "TP": 0,
+        "abstain_rate_on_correct": 0.0,
+        "drifted": 7,
+        "extraction_rate": 0.0,
+        "flagged": 0,
+        "precision": null,
+        "recall": 0.0,
+        "statements": 60
+      }
+    },
+    "per_claim_type": {
+      "cli_flag": {
+        "F1": 1.0,
+        "FN": 0,
+        "FP": 0,
+        "TP": 6,
+        "abstain_rate_on_correct": 0.0,
+        "drifted": 6,
+        "extraction_rate": 0.75,
+        "flagged": 6,
+        "precision": 1.0,
+        "recall": 1.0,
+        "statements": 240
+      },
+      "default_value": {
+        "F1": 0.833334,
+        "FN": 18,
+        "FP": 0,
+        "TP": 45,
+        "abstain_rate_on_correct": 0.0,
+        "drifted": 63,
+        "extraction_rate": 0.66875,
+        "flagged": 45,
+        "precision": 1.0,
+        "recall": 0.714286,
+        "statements": 480
+      },
+      "environment_variable": {
+        "F1": 1.0,
+        "FN": 0,
+        "FP": 0,
+        "TP": 9,
+        "abstain_rate_on_correct": 0.0,
+        "drifted": 9,
+        "extraction_rate": 1.0,
+        "flagged": 9,
+        "precision": 1.0,
+        "recall": 1.0,
+        "statements": 120
+      },
+      "file_path": {
+        "F1": 1.0,
+        "FN": 0,
+        "FP": 0,
+        "TP": 20,
+        "abstain_rate_on_correct": 0.0,
+        "drifted": 20,
+        "extraction_rate": 1.0,
+        "flagged": 20,
+        "precision": 1.0,
+        "recall": 1.0,
+        "statements": 60
+      },
+      "function_signature": {
+        "F1": 1.0,
+        "FN": 0,
+        "FP": 0,
+        "TP": 15,
+        "abstain_rate_on_correct": 0.0,
+        "drifted": 15,
+        "extraction_rate": 1.0,
+        "flagged": 15,
+        "precision": 1.0,
+        "recall": 1.0,
+        "statements": 60
+      },
+      "python_version": {
+        "F1": 1.0,
+        "FN": 0,
+        "FP": 0,
+        "TP": 9,
+        "abstain_rate_on_correct": 0.0,
+        "drifted": 9,
+        "extraction_rate": 1.0,
+        "flagged": 9,
+        "precision": 1.0,
+        "recall": 1.0,
+        "statements": 60
+      },
+      "route": {
+        "F1": 1.0,
+        "FN": 0,
+        "FP": 0,
+        "TP": 9,
+        "abstain_rate_on_correct": 0.0,
+        "drifted": 9,
+        "extraction_rate": 1.0,
+        "flagged": 9,
+        "precision": 1.0,
+        "recall": 1.0,
+        "statements": 60
+      }
+    },
+    "per_claim_type_category": {
+      "cli_flag": {
+        "canonical": {
+          "F1": 1.0,
+          "FN": 0,
+          "FP": 0,
+          "TP": 6,
+          "abstain_rate_on_correct": 0.0,
+          "drifted": 6,
+          "extraction_rate": 1.0,
+          "flagged": 6,
+          "precision": 1.0,
+          "recall": 1.0,
+          "statements": 60
+        },
+        "decoy_third_party": {
+          "F1": null,
+          "FN": 0,
+          "FP": 0,
+          "TP": 0,
+          "abstain_rate_on_correct": null,
+          "drifted": 0,
+          "extraction_rate": 0.666667,
+          "flagged": 0,
+          "precision": null,
+          "recall": null,
+          "statements": 180
+        }
+      },
+      "default_value": {
+        "canonical": {
+          "F1": 1.0,
+          "FN": 0,
+          "FP": 0,
+          "TP": 9,
+          "abstain_rate_on_correct": 0.0,
+          "drifted": 9,
+          "extraction_rate": 1.0,
+          "flagged": 9,
+          "precision": 1.0,
+          "recall": 1.0,
+          "statements": 60
+        },
+        "decoy": {
+          "F1": null,
+          "FN": 0,
+          "FP": 0,
+          "TP": 0,
+          "abstain_rate_on_correct": null,
+          "drifted": 0,
+          "extraction_rate": 0.35,
+          "flagged": 0,
+          "precision": null,
+          "recall": null,
+          "statements": 60
+        },
+        "natural_supported": {
+          "F1": 1.0,
+          "FN": 0,
+          "FP": 0,
+          "TP": 36,
+          "abstain_rate_on_correct": 0.0,
+          "drifted": 36,
+          "extraction_rate": 1.0,
+          "flagged": 36,
+          "precision": 1.0,
+          "recall": 1.0,
+          "statements": 240
+        },
+        "paraphrase_named": {
+          "F1": null,
+          "FN": 11,
+          "FP": 0,
+          "TP": 0,
+          "abstain_rate_on_correct": 0.0,
+          "drifted": 11,
+          "extraction_rate": 0.0,
+          "flagged": 0,
+          "precision": null,
+          "recall": 0.0,
+          "statements": 60
+        },
+        "unsupported_prose": {
+          "F1": null,
+          "FN": 7,
+          "FP": 0,
+          "TP": 0,
+          "abstain_rate_on_correct": 0.0,
+          "drifted": 7,
+          "extraction_rate": 0.0,
+          "flagged": 0,
+          "precision": null,
+          "recall": 0.0,
+          "statements": 60
+        }
+      },
+      "environment_variable": {
+        "canonical": {
+          "F1": 1.0,
+          "FN": 0,
+          "FP": 0,
+          "TP": 9,
+          "abstain_rate_on_correct": 0.0,
+          "drifted": 9,
+          "extraction_rate": 1.0,
+          "flagged": 9,
+          "precision": 1.0,
+          "recall": 1.0,
+          "statements": 60
+        },
+        "decoy_third_party": {
+          "F1": null,
+          "FN": 0,
+          "FP": 0,
+          "TP": 0,
+          "abstain_rate_on_correct": null,
+          "drifted": 0,
+          "extraction_rate": 1.0,
+          "flagged": 0,
+          "precision": null,
+          "recall": null,
+          "statements": 60
+        }
+      },
+      "file_path": {
+        "canonical": {
+          "F1": 1.0,
+          "FN": 0,
+          "FP": 0,
+          "TP": 20,
+          "abstain_rate_on_correct": 0.0,
+          "drifted": 20,
+          "extraction_rate": 1.0,
+          "flagged": 20,
+          "precision": 1.0,
+          "recall": 1.0,
+          "statements": 60
+        }
+      },
+      "function_signature": {
+        "canonical": {
+          "F1": 1.0,
+          "FN": 0,
+          "FP": 0,
+          "TP": 15,
+          "abstain_rate_on_correct": 0.0,
+          "drifted": 15,
+          "extraction_rate": 1.0,
+          "flagged": 15,
+          "precision": 1.0,
+          "recall": 1.0,
+          "statements": 60
+        }
+      },
+      "python_version": {
+        "canonical": {
+          "F1": 1.0,
+          "FN": 0,
+          "FP": 0,
+          "TP": 9,
+          "abstain_rate_on_correct": 0.0,
+          "drifted": 9,
+          "extraction_rate": 1.0,
+          "flagged": 9,
+          "precision": 1.0,
+          "recall": 1.0,
+          "statements": 60
+        }
+      },
+      "route": {
+        "canonical": {
+          "F1": 1.0,
+          "FN": 0,
+          "FP": 0,
+          "TP": 9,
+          "abstain_rate_on_correct": 0.0,
+          "drifted": 9,
+          "extraction_rate": 1.0,
+          "flagged": 9,
+          "precision": 1.0,
+          "recall": 1.0,
+          "statements": 60
+        }
+      }
+    },
+    "per_claim_type_label": {
+      "cli_flag": {
+        "correct": {
+          "F1": null,
+          "FN": 0,
+          "FP": 0,
+          "TP": 0,
+          "abstain_rate_on_correct": 0.0,
+          "drifted": 0,
+          "extraction_rate": 1.0,
+          "flagged": 0,
+          "precision": null,
+          "recall": null,
+          "statements": 54
+        },
+        "decoy": {
+          "F1": null,
+          "FN": 0,
+          "FP": 0,
+          "TP": 0,
+          "abstain_rate_on_correct": null,
+          "drifted": 0,
+          "extraction_rate": 0.666667,
+          "flagged": 0,
+          "precision": null,
+          "recall": null,
+          "statements": 180
+        },
+        "drifted": {
+          "F1": 1.0,
+          "FN": 0,
+          "FP": 0,
+          "TP": 6,
+          "abstain_rate_on_correct": null,
+          "drifted": 6,
+          "extraction_rate": 1.0,
+          "flagged": 6,
+          "precision": 1.0,
+          "recall": 1.0,
+          "statements": 6
+        }
+      },
+      "default_value": {
+        "correct": {
+          "F1": null,
+          "FN": 0,
+          "FP": 0,
+          "TP": 0,
+          "abstain_rate_on_correct": 0.0,
+          "drifted": 0,
+          "extraction_rate": 0.714286,
+          "flagged": 0,
+          "precision": null,
+          "recall": null,
+          "statements": 357
+        },
+        "decoy": {
+          "F1": null,
+          "FN": 0,
+          "FP": 0,
+          "TP": 0,
+          "abstain_rate_on_correct": null,
+          "drifted": 0,
+          "extraction_rate": 0.35,
+          "flagged": 0,
+          "precision": null,
+          "recall": null,
+          "statements": 60
+        },
+        "drifted": {
+          "F1": 0.833334,
+          "FN": 18,
+          "FP": 0,
+          "TP": 45,
+          "abstain_rate_on_correct": null,
+          "drifted": 63,
+          "extraction_rate": 0.714286,
+          "flagged": 45,
+          "precision": 1.0,
+          "recall": 0.714286,
+          "statements": 63
+        }
+      },
+      "environment_variable": {
+        "correct": {
+          "F1": null,
+          "FN": 0,
+          "FP": 0,
+          "TP": 0,
+          "abstain_rate_on_correct": 0.0,
+          "drifted": 0,
+          "extraction_rate": 1.0,
+          "flagged": 0,
+          "precision": null,
+          "recall": null,
+          "statements": 51
+        },
+        "decoy": {
+          "F1": null,
+          "FN": 0,
+          "FP": 0,
+          "TP": 0,
+          "abstain_rate_on_correct": null,
+          "drifted": 0,
+          "extraction_rate": 1.0,
+          "flagged": 0,
+          "precision": null,
+          "recall": null,
+          "statements": 60
+        },
+        "drifted": {
+          "F1": 1.0,
+          "FN": 0,
+          "FP": 0,
+          "TP": 9,
+          "abstain_rate_on_correct": null,
+          "drifted": 9,
+          "extraction_rate": 1.0,
+          "flagged": 9,
+          "precision": 1.0,
+          "recall": 1.0,
+          "statements": 9
+        }
+      },
+      "file_path": {
+        "correct": {
+          "F1": null,
+          "FN": 0,
+          "FP": 0,
+          "TP": 0,
+          "abstain_rate_on_correct": 0.0,
+          "drifted": 0,
+          "extraction_rate": 1.0,
+          "flagged": 0,
+          "precision": null,
+          "recall": null,
+          "statements": 40
+        },
+        "drifted": {
+          "F1": 1.0,
+          "FN": 0,
+          "FP": 0,
+          "TP": 20,
+          "abstain_rate_on_correct": null,
+          "drifted": 20,
+          "extraction_rate": 1.0,
+          "flagged": 20,
+          "precision": 1.0,
+          "recall": 1.0,
+          "statements": 20
+        }
+      },
+      "function_signature": {
+        "correct": {
+          "F1": null,
+          "FN": 0,
+          "FP": 0,
+          "TP": 0,
+          "abstain_rate_on_correct": 0.0,
+          "drifted": 0,
+          "extraction_rate": 1.0,
+          "flagged": 0,
+          "precision": null,
+          "recall": null,
+          "statements": 45
+        },
+        "drifted": {
+          "F1": 1.0,
+          "FN": 0,
+          "FP": 0,
+          "TP": 15,
+          "abstain_rate_on_correct": null,
+          "drifted": 15,
+          "extraction_rate": 1.0,
+          "flagged": 15,
+          "precision": 1.0,
+          "recall": 1.0,
+          "statements": 15
+        }
+      },
+      "python_version": {
+        "correct": {
+          "F1": null,
+          "FN": 0,
+          "FP": 0,
+          "TP": 0,
+          "abstain_rate_on_correct": 0.0,
+          "drifted": 0,
+          "extraction_rate": 1.0,
+          "flagged": 0,
+          "precision": null,
+          "recall": null,
+          "statements": 51
+        },
+        "drifted": {
+          "F1": 1.0,
+          "FN": 0,
+          "FP": 0,
+          "TP": 9,
+          "abstain_rate_on_correct": null,
+          "drifted": 9,
+          "extraction_rate": 1.0,
+          "flagged": 9,
+          "precision": 1.0,
+          "recall": 1.0,
+          "statements": 9
+        }
+      },
+      "route": {
+        "correct": {
+          "F1": null,
+          "FN": 0,
+          "FP": 0,
+          "TP": 0,
+          "abstain_rate_on_correct": 0.0,
+          "drifted": 0,
+          "extraction_rate": 1.0,
+          "flagged": 0,
+          "precision": null,
+          "recall": null,
+          "statements": 51
+        },
+        "drifted": {
+          "F1": 1.0,
+          "FN": 0,
+          "FP": 0,
+          "TP": 9,
+          "abstain_rate_on_correct": null,
+          "drifted": 9,
+          "extraction_rate": 1.0,
+          "flagged": 9,
+          "precision": 1.0,
+          "recall": 1.0,
+          "statements": 9
+        }
+      }
+    },
+    "per_operator": {
+      "add_param": {
+        "F1": 1.0,
+        "FN": 0,
+        "FP": 0,
+        "TP": 4,
+        "abstain_rate_on_correct": 0.0,
+        "drifted": 4,
+        "extraction_rate": 0.808824,
+        "flagged": 4,
+        "precision": 1.0,
+        "recall": 1.0,
+        "statements": 68
+      },
+      "change_default": {
+        "F1": 0.865385,
+        "FN": 14,
+        "FP": 0,
+        "TP": 45,
+        "abstain_rate_on_correct": 0.0,
+        "drifted": 59,
+        "extraction_rate": 0.786667,
+        "flagged": 45,
+        "precision": 1.0,
+        "recall": 0.762712,
+        "statements": 150
+      },
+      "change_requires_python": {
+        "F1": 1.0,
+        "FN": 0,
+        "FP": 0,
+        "TP": 9,
+        "abstain_rate_on_correct": 0.0,
+        "drifted": 9,
+        "extraction_rate": 0.793333,
+        "flagged": 9,
+        "precision": 1.0,
+        "recall": 1.0,
+        "statements": 150
+      },
+      "delete_directory": {
+        "F1": 1.0,
+        "FN": 0,
+        "FP": 0,
+        "TP": 7,
+        "abstain_rate_on_correct": 0.0,
+        "drifted": 7,
+        "extraction_rate": 0.810345,
+        "flagged": 7,
+        "precision": 1.0,
+        "recall": 1.0,
+        "statements": 116
+      },
+      "delete_file": {
+        "F1": 1.0,
+        "FN": 0,
+        "FP": 0,
+        "TP": 13,
+        "abstain_rate_on_correct": 0.0,
+        "drifted": 13,
+        "extraction_rate": 0.793103,
+        "flagged": 13,
+        "precision": 1.0,
+        "recall": 1.0,
+        "statements": 203
+      },
+      "rename_env_read": {
+        "F1": 1.0,
+        "FN": 0,
+        "FP": 0,
+        "TP": 9,
+        "abstain_rate_on_correct": 0.0,
+        "drifted": 9,
+        "extraction_rate": 0.789855,
+        "flagged": 9,
+        "precision": 1.0,
+        "recall": 1.0,
+        "statements": 138
+      },
+      "rename_flag": {
+        "F1": 1.0,
+        "FN": 0,
+        "FP": 0,
+        "TP": 6,
+        "abstain_rate_on_correct": 0.0,
+        "drifted": 6,
+        "extraction_rate": 0.793478,
+        "flagged": 6,
+        "precision": 1.0,
+        "recall": 1.0,
+        "statements": 92
+      },
+      "rename_param": {
+        "F1": 0.846154,
+        "FN": 4,
+        "FP": 0,
+        "TP": 11,
+        "abstain_rate_on_correct": 0.0,
+        "drifted": 15,
+        "extraction_rate": 0.783133,
+        "flagged": 11,
+        "precision": 1.0,
+        "recall": 0.733333,
+        "statements": 166
+      },
+      "rename_route": {
+        "F1": 1.0,
+        "FN": 0,
+        "FP": 0,
+        "TP": 9,
+        "abstain_rate_on_correct": 0.0,
+        "drifted": 9,
+        "extraction_rate": 0.789855,
+        "flagged": 9,
+        "precision": 1.0,
+        "recall": 1.0,
+        "statements": 138
+      }
+    }
+  },
+  "failure_causes": {
+    "FN": [
+      {
+        "cause": "not_extracted",
+        "count": 18
+      }
+    ],
+    "FP": []
+  },
+  "latency_ms": {
+    "p50": 15.39,
+    "p95": 25.981,
+    "per_case": [
+      {
+        "case_id": "case-0000",
+        "latency_ms": 15.328
+      },
+      {
+        "case_id": "case-0001",
+        "latency_ms": 14.984
+      },
+      {
+        "case_id": "case-0002",
+        "latency_ms": 12.399
+      },
+      {
+        "case_id": "case-0003",
+        "latency_ms": 12.578
+      },
+      {
+        "case_id": "case-0004",
+        "latency_ms": 13.298
+      },
+      {
+        "case_id": "case-0005",
+        "latency_ms": 13.276
+      },
+      {
+        "case_id": "case-0006",
+        "latency_ms": 14.21
+      },
+      {
+        "case_id": "case-0007",
+        "latency_ms": 12.835
+      },
+      {
+        "case_id": "case-0008",
+        "latency_ms": 12.753
+      },
+      {
+        "case_id": "case-0009",
+        "latency_ms": 19.362
+      },
+      {
+        "case_id": "case-0010",
+        "latency_ms": 25.981
+      },
+      {
+        "case_id": "case-0011",
+        "latency_ms": 29.392
+      },
+      {
+        "case_id": "case-0012",
+        "latency_ms": 15.786
+      },
+      {
+        "case_id": "case-0013",
+        "latency_ms": 14.805
+      },
+      {
+        "case_id": "case-0014",
+        "latency_ms": 13.204
+      },
+      {
+        "case_id": "case-0015",
+        "latency_ms": 12.427
+      },
+      {
+        "case_id": "case-0016",
+        "latency_ms": 14.241
+      },
+      {
+        "case_id": "case-0017",
+        "latency_ms": 12.335
+      },
+      {
+        "case_id": "case-0018",
+        "latency_ms": 23.163
+      },
+      {
+        "case_id": "case-0019",
+        "latency_ms": 20.206
+      },
+      {
+        "case_id": "case-0020",
+        "latency_ms": 12.561
+      },
+      {
+        "case_id": "case-0021",
+        "latency_ms": 17.435
+      },
+      {
+        "case_id": "case-0022",
+        "latency_ms": 16.547
+      },
+      {
+        "case_id": "case-0023",
+        "latency_ms": 14.737
+      },
+      {
+        "case_id": "case-0024",
+        "latency_ms": 14.207
+      },
+      {
+        "case_id": "case-0025",
+        "latency_ms": 16.553
+      },
+      {
+        "case_id": "case-0026",
+        "latency_ms": 13.991
+      },
+      {
+        "case_id": "case-0027",
+        "latency_ms": 15.675
+      },
+      {
+        "case_id": "case-0028",
+        "latency_ms": 17.567
+      },
+      {
+        "case_id": "case-0029",
+        "latency_ms": 15.744
+      },
+      {
+        "case_id": "case-0030",
+        "latency_ms": 13.956
+      },
+      {
+        "case_id": "case-0031",
+        "latency_ms": 14.147
+      },
+      {
+        "case_id": "case-0032",
+        "latency_ms": 15.218
+      },
+      {
+        "case_id": "case-0033",
+        "latency_ms": 16.997
+      },
+      {
+        "case_id": "case-0034",
+        "latency_ms": 24.802
+      },
+      {
+        "case_id": "case-0035",
+        "latency_ms": 16.248
+      },
+      {
+        "case_id": "case-0036",
+        "latency_ms": 13.691
+      },
+      {
+        "case_id": "case-0037",
+        "latency_ms": 15.39
+      },
+      {
+        "case_id": "case-0038",
+        "latency_ms": 11.433
+      },
+      {
+        "case_id": "case-0039",
+        "latency_ms": 10.865
+      },
+      {
+        "case_id": "case-0040",
+        "latency_ms": 11.442
+      },
+      {
+        "case_id": "case-0041",
+        "latency_ms": 10.808
+      },
+      {
+        "case_id": "case-0042",
+        "latency_ms": 12.461
+      },
+      {
+        "case_id": "case-0043",
+        "latency_ms": 14.921
+      },
+      {
+        "case_id": "case-0044",
+        "latency_ms": 13.515
+      },
+      {
+        "case_id": "case-0045",
+        "latency_ms": 16.066
+      },
+      {
+        "case_id": "case-0046",
+        "latency_ms": 19.31
+      },
+      {
+        "case_id": "case-0047",
+        "latency_ms": 17.028
+      },
+      {
+        "case_id": "case-0048",
+        "latency_ms": 20.608
+      },
+      {
+        "case_id": "case-0049",
+        "latency_ms": 20.965
+      },
+      {
+        "case_id": "case-0050",
+        "latency_ms": 19.251
+      },
+      {
+        "case_id": "case-0051",
+        "latency_ms": 19.29
+      },
+      {
+        "case_id": "case-0052",
+        "latency_ms": 33.678
+      },
+      {
+        "case_id": "case-0053",
+        "latency_ms": 25.084
+      },
+      {
+        "case_id": "case-0054",
+        "latency_ms": 22.508
+      },
+      {
+        "case_id": "case-0055",
+        "latency_ms": 18.611
+      },
+      {
+        "case_id": "case-0056",
+        "latency_ms": 15.615
+      },
+      {
+        "case_id": "case-0057",
+        "latency_ms": 15.39
+      },
+      {
+        "case_id": "case-0058",
+        "latency_ms": 16.371
+      },
+      {
+        "case_id": "case-0059",
+        "latency_ms": 27.875
+      }
+    ]
+  },
+  "limitations": [
+    "The dataset is synthetic and template-generated; these metrics indicate harness behavior, not real-world accuracy.",
+    "Per-category recall shows where the extractor does not look; a real-repository dataset is still pending.",
+    "Blueprint targets are goals and are not benchmark results.",
+    "N1 is deliberately generous: it flags mentions in mutated cases and never flags unmutated controls."
+  ],
+  "schema_version": 1,
+  "seed": 1337,
+  "statement_count": 1080
+}

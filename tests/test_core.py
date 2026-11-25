@@ -43,7 +43,7 @@ class CoreTests(unittest.TestCase):
             (root / "docs.md").write_text("See `../secret.py`.\nSee `gone.py`.\n")
             findings, _, _ = analyze(root, ("docs.md",), ("src.py",))
             self.assertEqual(findings[0].verdict, Verdict.UNVERIFIABLE)
-            self.assertEqual(findings[1].verdict, Verdict.FALSE)
+            self.assertEqual(findings[1].verdict, Verdict.UNVERIFIABLE)
 
     def test_tutorial_file_instructions_are_not_path_claims(self) -> None:
         with tempfile.TemporaryDirectory(dir=Path(__file__).parent) as directory:
@@ -80,7 +80,7 @@ class CoreTests(unittest.TestCase):
             )
             findings, _, claims = analyze(root, ("docs",), (".",))
             self.assertEqual([claim.subject for claim in claims], ["missing_module.py", "config/settings.py", "missing_module.py"])
-            self.assertEqual([finding.verdict for finding in findings], [Verdict.FALSE, Verdict.TRUE, Verdict.FALSE])
+            self.assertEqual([finding.verdict for finding in findings], [Verdict.UNVERIFIABLE, Verdict.TRUE, Verdict.UNVERIFIABLE])
 
     def test_syntax_errors_are_structured_and_missing_scope_is_error(self) -> None:
         with tempfile.TemporaryDirectory(dir=Path(__file__).parent) as directory:

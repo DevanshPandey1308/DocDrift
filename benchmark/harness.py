@@ -24,7 +24,7 @@ from docdrift_cli.main import main as cli_main
 
 
 SCHEMA_VERSION = 1
-GENERATOR_VERSION = 2
+GENERATOR_VERSION = 3
 ROOT = Path(__file__).resolve().parent.parent
 DEFAULT_DATASET = ROOT / "benchmark/datasets/synthetic"
 DEFAULT_OUT = ROOT / "benchmark/results/latest"
@@ -36,6 +36,7 @@ CLAIM_TYPES = (
 OPERATORS = (
     "change_default", "rename_param", "add_param", "rename_flag",
     "rename_env_read", "delete_file", "change_requires_python", "rename_route",
+    "delete_directory",
 )
 UNSUPPORTED_TEMPLATES = (
     "By default, calls time out after {value} seconds.",
@@ -103,6 +104,9 @@ def _affected_operator(statement: StatementSpec, mutations: dict[str, object]) -
             return "rename_param"
         if "add_param" in mutations:
             return "add_param"
+    if statement.claim_type == "file_path":
+        return next((operator for operator in ("delete_file", "delete_directory")
+                     if operator in mutations), None)
     mapped = {
         "cli_flag": "rename_flag",
         "environment_variable": "rename_env_read",
@@ -169,11 +173,15 @@ def _choose_mutations(rng: random.Random, forced: Iterable[str] | None) -> list[
             raise ValueError("unknown mutation operator")
         if {"rename_param", "add_param"}.issubset(selected):
             raise ValueError("rename_param and add_param cannot be combined in one case")
+        if {"delete_file", "delete_directory"}.issubset(selected):
+            raise ValueError("delete_file and delete_directory cannot be combined in one case")
         return selected
     if rng.random() < 0.35:
         return []
     count = rng.randint(1, 3)
-    pool = list(OPERATORS)
+    # Keep the v2 random stream and operator ordering stable. The v3 directory
+    # deletion operator is selected from its own stream in generate_case().
+    pool = [operator for operator in OPERATORS if operator != "delete_directory"]
     rng.shuffle(pool)
     selected: list[str] = []
     for operator in pool:
@@ -189,7 +197,8 @@ def _choose_mutations(rng: random.Random, forced: Iterable[str] | None) -> list[
 
 def generate_case(dataset_root: Path, case_number: int, rng: random.Random,
                   forced_mutations: Iterable[str] | None = None,
-                  *, decoy_rng: random.Random | None = None) -> dict[str, Any]:
+                  *, decoy_rng: random.Random | None = None,
+                  directory_rng: random.Random | None = None) -> dict[str, Any]:
     case_id = f"case-{case_number:04d}"
     case_dir = dataset_root / case_id
     repo = case_dir / "repo"
@@ -211,6 +220,10 @@ def generate_case(dataset_root: Path, case_number: int, rng: random.Random,
     separate_decoy_rng.shuffle(decoy_statements)
     statements.extend(decoy_statements)
     selected = _choose_mutations(rng, forced_mutations)
+    separate_directory_rng = directory_rng or random.Random(case_number + 2)
+    if (forced_mutations is None and "delete_file" not in selected
+            and separate_directory_rng.random() < 0.10):
+        selected.append("delete_directory")
     mutations: dict[str, object] = {}
     for operator in selected:
         if operator == "change_default":
@@ -229,6 +242,8 @@ def generate_case(dataset_root: Path, case_number: int, rng: random.Random,
             mutations[operator] = "3.11" if version != "3.11" else "3.10"
         elif operator == "rename_route":
             mutations[operator] = f"/records/{case_number:03d}"
+        elif operator == "delete_directory":
+            mutations[operator] = "reference"
 
     actual_timeout = int(mutations.get("change_default", timeout))
     actual_retries_name = str(mutations.get("rename_param", "retries"))
@@ -262,8 +277,14 @@ def generate_case(dataset_root: Path, case_number: int, rng: random.Random,
     _write_text(repo / "pyproject.toml", f'[project]\nrequires-python = ">={actual_version}"\n')
     # Keep path composition explicit so dataset paths remain repository-relative.
     data_path = repo / path
-    if "delete_file" not in mutations:
+    if "delete_file" not in mutations and "delete_directory" not in mutations:
         _write_text(data_path, f"reference data for case {case_number:03d}\n")
+    elif "delete_file" in mutations:
+        _write_text(repo / "reference/README.md", "Reference files are stored here.\n")
+    elif "delete_directory" in mutations:
+        _write_text(data_path, f"reference data for case {case_number:03d}\n")
+    if "delete_directory" in mutations:
+        shutil.rmtree(repo / str(mutations["delete_directory"]))
 
     doc_lines: list[str] = []
     manifest_statements: list[dict[str, Any]] = []
@@ -310,7 +331,9 @@ def generate_dataset(dataset_root: Path, seed: int = 1337, repos: int = 60) -> l
     target.mkdir(parents=True, exist_ok=True)
     rng = random.Random(seed)
     decoy_rng = random.Random(seed + 1)
-    return [generate_case(target, number, rng, decoy_rng=decoy_rng) for number in range(repos)]
+    directory_rng = random.Random(seed + 2)
+    return [generate_case(target, number, rng, decoy_rng=decoy_rng,
+                          directory_rng=directory_rng) for number in range(repos)]
 
 
 def validate_manifest(case_dir: Path, manifest: dict[str, Any]) -> None:

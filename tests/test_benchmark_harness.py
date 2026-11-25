@@ -55,13 +55,13 @@ class BenchmarkHarnessTests(unittest.TestCase):
                     lines = (case_dir / "repo" / statement["path"]).read_text(encoding="utf-8").splitlines()
                     self.assertEqual(lines[statement["line"] - 1], statement["text"])
 
-    def test_generator_v2_includes_third_party_decoys_for_clean_and_mutated_cases(self) -> None:
+    def test_generator_v3_includes_third_party_decoys_for_clean_and_mutated_cases(self) -> None:
         with tempfile.TemporaryDirectory() as temporary:
             root = Path(temporary)
             clean = generate_case(root, 0, random.Random(0))
             mutated = generate_case(root, 1, random.Random(72), ["change_default"])
             for manifest in (clean, mutated):
-                self.assertEqual(manifest["generator_version"], 2)
+                self.assertEqual(manifest["generator_version"], 3)
                 self.assertEqual(manifest["mutated"], manifest is mutated)
                 decoys = [item for item in manifest["statements"] if item["category"] == "decoy_third_party"]
                 self.assertEqual(len(decoys), 4)
@@ -92,6 +92,11 @@ class BenchmarkHarnessTests(unittest.TestCase):
                     agreement = _independent_agreement(case_dir / "repo", statement)
                     self.assertEqual(agreement, statement["label"] == "correct",
                                      (operator, statement, agreement))
+                if operator == "delete_file":
+                    self.assertTrue((case_dir / "repo/reference").is_dir())
+                    self.assertTrue((case_dir / "repo/reference/README.md").is_file())
+                if operator == "delete_directory":
+                    self.assertFalse((case_dir / "repo/reference").exists())
 
     def test_metrics_and_zero_denominators(self) -> None:
         rows = [
