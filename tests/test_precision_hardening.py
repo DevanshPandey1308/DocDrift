@@ -7,10 +7,9 @@ import tempfile
 import unittest
 from pathlib import Path
 
+from docdrift_cli.main import main
 from docdrift_core import analyze, extract_markdown
 from docdrift_core.models import ClaimType, Verdict
-from docdrift_cli.main import main
-
 
 FIXTURES = Path(__file__).parent / "fixtures"
 PATHS = FIXTURES / "path_edge_cases_repo"

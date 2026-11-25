@@ -1,0 +1,13 @@
+.git
+.venv
+venv
+node_modules
+benchmark/real/repos
+benchmark/real/heldout
+benchmark/real/snapshots
+benchmark/results
+__pycache__
+*.py[cod]
+.env
+.env.*
+secrets

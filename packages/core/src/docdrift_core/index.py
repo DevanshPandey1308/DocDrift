@@ -4,7 +4,6 @@ from __future__ import annotations
 
 import ast
 import os
-import re
 import tomllib
 from dataclasses import dataclass, field
 from pathlib import Path
@@ -329,9 +328,12 @@ class _Visitor(ast.NodeVisitor):
             self.index.routes_complete = False
         if name in {"add_api_route", "add_url_rule"} and receiver in self.python_apps:
             self.index.routes_complete = False
-        if isinstance(node.func, ast.Attribute) and node.func.attr in {"get", "post", "put", "patch", "delete", "options", "head", "route", "api_route"}:
-            if receiver in self.python_apps or receiver in self.route_prefixes:
-                self._index_route(node, self.python_apps.get(receiver), self.route_prefixes.get(receiver))
+        if (
+            isinstance(node.func, ast.Attribute)
+            and node.func.attr in {"get", "post", "put", "patch", "delete", "options", "head", "route", "api_route"}
+            and (receiver in self.python_apps or receiver in self.route_prefixes)
+        ):
+            self._index_route(node, self.python_apps.get(receiver), self.route_prefixes.get(receiver))
         if name in {"getenv", "get"} and isinstance(node.func, ast.Attribute):
             owner = ast.unparse(node.func.value)
             if owner in {"os", "os.environ"} and node.args:

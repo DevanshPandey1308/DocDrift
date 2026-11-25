@@ -4,19 +4,19 @@ from __future__ import annotations
 
 import hashlib
 import re
-from pathlib import Path
 from collections.abc import Iterable
+from pathlib import Path
 
 from .models import Claim, ClaimType
 
 _PATTERNS: tuple[tuple[ClaimType, re.Pattern[str]], ...] = (
-    (ClaimType.ROUTE, re.compile(r"\b(GET|POST|PUT|PATCH|DELETE|OPTIONS|HEAD)\s+`([^`]+)`\s+(?:endpoint|route)\b", re.I)),
-    (ClaimType.FUNCTION, re.compile(r"`?([A-Za-z_]\w*(?:\.[A-Za-z_]\w*)*)\(([^()]*)\)`?\s+(?:accepts|takes|has parameters)\b", re.I)),
-    (ClaimType.DEFAULT, re.compile(r"(?:the\s+)?default\s+(?:for\s+)?`?([A-Za-z_]\w*)`?\s+is\s+(`[^`]+`|[^.,;]+)", re.I)),
-    (ClaimType.CLI_FLAG, re.compile(r"(?:(?:run|invoke|use)(?:\s+the)?\s+(?:CLI|command)(?:\s+with)?\s+)?`(--[A-Za-z][\w-]*|-h|-V)`", re.I)),
-    (ClaimType.ENV_VAR, re.compile(r"(?:environment variable\s+)?`([A-Z][A-Z0-9_]*)`(?:\s+environment variable)?", re.I)),
+    (ClaimType.ROUTE, re.compile(r"\b(GET|POST|PUT|PATCH|DELETE|OPTIONS|HEAD)\s+`([^`]+)`\s+(?:endpoint|route)\b", re.IGNORECASE)),
+    (ClaimType.FUNCTION, re.compile(r"`?([A-Za-z_]\w*(?:\.[A-Za-z_]\w*)*)\(([^()]*)\)`?\s+(?:accepts|takes|has parameters)\b", re.IGNORECASE)),
+    (ClaimType.DEFAULT, re.compile(r"(?:the\s+)?default\s+(?:for\s+)?`?([A-Za-z_]\w*)`?\s+is\s+(`[^`]+`|[^.,;]+)", re.IGNORECASE)),
+    (ClaimType.CLI_FLAG, re.compile(r"(?:(?:run|invoke|use)(?:\s+the)?\s+(?:CLI|command)(?:\s+with)?\s+)?`(--[A-Za-z][\w-]*|-h|-V)`", re.IGNORECASE)),
+    (ClaimType.ENV_VAR, re.compile(r"(?:environment variable\s+)?`([A-Z][A-Z0-9_]*)`(?:\s+environment variable)?", re.IGNORECASE)),
     (ClaimType.FILE_PATH, re.compile(r"`([^`]+)`")),
-    (ClaimType.PYTHON_VERSION, re.compile(r"requires\s+Python\s+([0-9]+(?:\.[0-9]+){0,2})\s+or newer", re.I)),
+    (ClaimType.PYTHON_VERSION, re.compile(r"requires\s+Python\s+([0-9]+(?:\.[0-9]+){0,2})\s+or newer", re.IGNORECASE)),
 )
 _PARAMS = re.compile(r"\s*\*{0,2}([A-Za-z_]\w*)\s*(?:=.*)?\s*")
 _LITERAL = re.compile(r"^(?:None|True|False|-?\d+(?:\.\d+)?|['\"][^'\"]*['\"]|`(?:None|True|False|-?\d+(?:\.\d+)?|[^`]+)`)$")
@@ -38,25 +38,25 @@ _TABLE_SEPARATOR = re.compile(r"^:?-{3,}:?$")
 _PATH_EXTENSION = re.compile(r"\.[A-Za-z0-9_-]+$")
 _NOISE_PATHS = {"n/a", "i/o", "and/or", "w/o", "tcp/ip"}
 _TUTORIAL_FILE_INSTRUCTIONS: tuple[re.Pattern[str], ...] = (
-    re.compile(r"^\s*(?:[-*+]\s+)?(?:now\s+)?create\s+(?:(?:a|an|another|the|new)\s+)?(?:empty\s+|demo\s+)?(?:file|module)(?:/module)?\s+`([^`]+)`(?:\s+(?:with|containing)\b.*|[.:]?\s*$)", re.I),
-    re.compile(r"^\s*(?:[-*+]\s+)?(?:now\s+)?create\s+(?:(?:a|an|another|new)\s+)?`([^`]+)`(?:\s+(?:file|module))?(?:\s+(?:with|containing|in|inside|under)\b.*|[.:]?\s*$)", re.I),
-    re.compile(r"^\s*(?:finally,\s*)?we need to create\s+(?:a|an|the|new)?\s*`([^`]+)`\s+(?:file|module)(?:\s+(?:in|inside|under)\b.*|[.:]?\s*$)", re.I),
-    re.compile(r"^\s*(?:and\s+)?let'?s start with a file\s+`([^`]+)`\s*:\s*$", re.I),
-    re.compile(r"^\s*(?:and\s+)?now the equivalent\b.*\bin\s+`([^`]+)`\s*:\s*$", re.I),
-    re.compile(r"^\s*now let'?s put\b.{0,180}\btogether\b.{0,120}\bin\s+`([^`]+)`\s*:\s*$", re.I),
-    re.compile(r"^\s*(?:[-*+]\s+)?(?:now\s+)?(?:modify|update|edit)\s+(?:the\s+)?file\s+`([^`]+)`(?:\s+(?:with|to)\b.*|[.!:]?\s*$)", re.I),
-    re.compile(r"^\s*but to achieve that, we just have to add\b.{0,180}\bto the same\s+`([^`]+)`\s+file we already had\s*:\s*$", re.I),
-    re.compile(r"^\s*(?:[-*+]\s+)?(?:and then|now|then)\s+update\s+(?:your|the)\s+`([^`]+)`\s+with\s*:\s*$", re.I),
-    re.compile(r"^\s*(?:[-*+]\s+)?now\s+let'?s\s+start\b.{0,180}?,\s*(?:update|modify|edit)\s+(?:the\s+)?(?:file\s+)?`([^`]+)`\s+with\s*:\s*$", re.I),
-    re.compile(r"^\s*(?:[-*+]\s+)?(?:now\s+)?you could create\b.{0,160}?\bfor example\s+`([^`]+)`\s*[:.]?\s*$", re.I),
-    re.compile(r"^\s*(?:[-*+]\s+)?(?:then\s+)?you can write a template at\s+`([^`]+)`\s+with,\s+for example\s*:\s*$", re.I),
-    re.compile(r"^\s*(?:to run any of the examples,\s*)?copy\s+(?:that(?:\s+example(?:\s+from\s+above)?)?|the code|the example)\s+to a file\s+`([^`]+)`(?:,\s*and\s+(?:run|start|execute)\b.*)?[.:]?\s*$", re.I),
-    re.compile(r"^\s*here's what we do in\s+`([^`]+)`\s*:\s*$", re.I),
+    re.compile(r"^\s*(?:[-*+]\s+)?(?:now\s+)?create\s+(?:(?:a|an|another|the|new)\s+)?(?:empty\s+|demo\s+)?(?:file|module)(?:/module)?\s+`([^`]+)`(?:\s+(?:with|containing)\b.*|[.:]?\s*$)", re.IGNORECASE),
+    re.compile(r"^\s*(?:[-*+]\s+)?(?:now\s+)?create\s+(?:(?:a|an|another|new)\s+)?`([^`]+)`(?:\s+(?:file|module))?(?:\s+(?:with|containing|in|inside|under)\b.*|[.:]?\s*$)", re.IGNORECASE),
+    re.compile(r"^\s*(?:finally,\s*)?we need to create\s+(?:a|an|the|new)?\s*`([^`]+)`\s+(?:file|module)(?:\s+(?:in|inside|under)\b.*|[.:]?\s*$)", re.IGNORECASE),
+    re.compile(r"^\s*(?:and\s+)?let'?s start with a file\s+`([^`]+)`\s*:\s*$", re.IGNORECASE),
+    re.compile(r"^\s*(?:and\s+)?now the equivalent\b.*\bin\s+`([^`]+)`\s*:\s*$", re.IGNORECASE),
+    re.compile(r"^\s*now let'?s put\b.{0,180}\btogether\b.{0,120}\bin\s+`([^`]+)`\s*:\s*$", re.IGNORECASE),
+    re.compile(r"^\s*(?:[-*+]\s+)?(?:now\s+)?(?:modify|update|edit)\s+(?:the\s+)?file\s+`([^`]+)`(?:\s+(?:with|to)\b.*|[.!:]?\s*$)", re.IGNORECASE),
+    re.compile(r"^\s*but to achieve that, we just have to add\b.{0,180}\bto the same\s+`([^`]+)`\s+file we already had\s*:\s*$", re.IGNORECASE),
+    re.compile(r"^\s*(?:[-*+]\s+)?(?:and then|now|then)\s+update\s+(?:your|the)\s+`([^`]+)`\s+with\s*:\s*$", re.IGNORECASE),
+    re.compile(r"^\s*(?:[-*+]\s+)?now\s+let'?s\s+start\b.{0,180}?,\s*(?:update|modify|edit)\s+(?:the\s+)?(?:file\s+)?`([^`]+)`\s+with\s*:\s*$", re.IGNORECASE),
+    re.compile(r"^\s*(?:[-*+]\s+)?(?:now\s+)?you could create\b.{0,160}?\bfor example\s+`([^`]+)`\s*[:.]?\s*$", re.IGNORECASE),
+    re.compile(r"^\s*(?:[-*+]\s+)?(?:then\s+)?you can write a template at\s+`([^`]+)`\s+with,\s+for example\s*:\s*$", re.IGNORECASE),
+    re.compile(r"^\s*(?:to run any of the examples,\s*)?copy\s+(?:that(?:\s+example(?:\s+from\s+above)?)?|the code|the example)\s+to a file\s+`([^`]+)`(?:,\s*and\s+(?:run|start|execute)\b.*)?[.:]?\s*$", re.IGNORECASE),
+    re.compile(r"^\s*here's what we do in\s+`([^`]+)`\s*:\s*$", re.IGNORECASE),
 )
-_TUTORIAL_SIBLING_FILES = re.compile(r"^\s*the file would live right beside\b.*:\s*$", re.I)
+_TUTORIAL_SIBLING_FILES = re.compile(r"^\s*the file would live right beside\b.*:\s*$", re.IGNORECASE)
 _THIRD_PARTY_COMMAND_FLAG = re.compile(
     r"`(?:pytest|pip|docker|git|npm)\b[^`]*?((?:--[A-Za-z][\w-]*|-h|-V))[^`]*`",
-    re.I,
+    re.IGNORECASE,
 )
 
 
@@ -88,7 +88,7 @@ def _sentence_has_environment_context(line: str, start: int, end: int) -> bool:
     right_candidates = [line.find(mark, end) for mark in ".!?" if line.find(mark, end) >= 0]
     right = min(right_candidates) if right_candidates else len(line)
     sentence = line[left:right]
-    return bool(re.search(r"\b(?:environment\s+variable|env\s+var)\b|\benv\s*:", sentence, re.I))
+    return bool(re.search(r"\b(?:environment\s+variable|env\s+var)\b|\benv\s*:", sentence, re.IGNORECASE))
 
 
 def _expected(kind: ClaimType, match: re.Match[str]) -> object:
@@ -176,12 +176,12 @@ def extract_markdown(text: str, document_path: str, root: Path | None = None) ->
                 if first and default_value.casefold() not in {"", "-", "—", "required", "n/a"}:
                     value_match = _UNIT_VALUE.fullmatch(default_value)
                     value = value_match.group(1).strip("`") if value_match else default_value
-                    expected: dict[str, object] = {"value": value}
+                    table_expected: dict[str, object] = {"value": value}
                     if value_match:
-                        expected["unit"] = value_match.group(2)
+                        table_expected["unit"] = value_match.group(2)
                     elif not _LITERAL.fullmatch(default_value):
-                        expected["ambiguous"] = True
-                    add_claim(ClaimType.DEFAULT, first.group(1), expected, line,
+                        table_expected["ambiguous"] = True
+                    add_claim(ClaimType.DEFAULT, first.group(1), table_expected, line,
                               line_no, 0, len(line), f"table-default:{first.group(1)}")
                 continue
             else:

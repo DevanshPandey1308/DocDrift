@@ -8,7 +8,6 @@ from pathlib import Path
 from docdrift_core import analyze, build_impact_index, extract_markdown
 from docdrift_core.models import Verdict, to_dict
 
-
 ROOT = Path(__file__).parent / "fixtures/sample_repo"
 ROUTE_CLI = Path(__file__).parent / "fixtures/route_cli_repo"
 DYNAMIC_ROUTE = Path(__file__).parent / "fixtures/dynamic_route_repo"
@@ -106,9 +105,9 @@ class CoreTests(unittest.TestCase):
         findings, _, _ = analyze(ROUTE_CLI, ("docs",), ("src",))
         by_subject = {(f.claim.type.value, f.claim.subject): f for f in findings}
         health = by_subject[("route", "/health")]
-        items = [f for f in findings if f.claim.type.value == "route" and f.claim.expected["method"] == "POST"][0]
-        head_items = [f for f in findings if f.claim.type.value == "route" and f.claim.expected["method"] == "HEAD"][0]
-        put_items = [f for f in findings if f.claim.type.value == "route" and f.claim.expected["method"] == "PUT"][0]
+        items = next(f for f in findings if f.claim.type.value == "route" and f.claim.expected["method"] == "POST")
+        head_items = next(f for f in findings if f.claim.type.value == "route" and f.claim.expected["method"] == "HEAD")
+        put_items = next(f for f in findings if f.claim.type.value == "route" and f.claim.expected["method"] == "PUT")
         click_flag = by_subject[("cli_flag", "--click-count")]
         typer_flag = by_subject[("cli_flag", "--typer-limit")]
         dynamic_flag = by_subject[("cli_flag", "--computed")]

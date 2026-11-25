@@ -15,7 +15,7 @@ DYNAMIC_ROUTE_FIXTURE = ROOT / "tests/fixtures/dynamic_route_repo"
 
 class CliTests(unittest.TestCase):
     def run_cli(self, *args: str) -> subprocess.CompletedProcess[str]:
-        return subprocess.run([sys.executable, str(ROOT / "docdrift.py"), *args], cwd=ROOT, text=True, capture_output=True)
+        return subprocess.run([sys.executable, str(ROOT / "docdrift.py"), *args], check=False, cwd=ROOT, text=True, capture_output=True)
 
     def test_end_to_end_exit_and_json(self) -> None:
         text = self.run_cli("check", "--repo", str(FIXTURE), "--docs", "docs", "--source", "src")

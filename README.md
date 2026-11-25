@@ -57,7 +57,7 @@ For a disposable local integration environment, first start Docker Desktop and c
 docker info
 ```
 
-There is no Compose configuration in this repository. Start these disposable containers in separate PowerShell windows. They bind only to loopback, have no persistent volumes, and are removed when stopped. The PostgreSQL container uses trust authentication only for this isolated local test instance; do not reuse this configuration for a shared or production service.
+For a managed local stack, see [Run with Docker Compose](#run-with-docker-compose). The following manual-container option remains available for disposable integration testing. Start these containers in separate PowerShell windows. They bind only to loopback, have no persistent volumes, and are removed when stopped. The PostgreSQL container uses trust authentication only for this isolated local test instance; do not reuse this configuration for a shared or production service.
 
 ```powershell
 docker run --rm --name docdrift-postgres -p 127.0.0.1:5432:5432 -e POSTGRES_HOST_AUTH_METHOD=trust -e POSTGRES_USER=docdrift -e POSTGRES_DB=docdrift postgres:16
@@ -182,6 +182,28 @@ The supported claim grammar is intentionally small; see [docs/supported-claims.m
 - `2`: invalid repository/scope or source analysis errors.
 
 Syntax errors are included in JSON and printed to stderr in text mode. They produce exit code 2, even when findings are also returned.
+
+## Run with Docker Compose
+
+Requires Docker Desktop with its Linux container engine running. Copy `.env.example` to `.env`, replace the required placeholders, create `secrets/`, and place the GitHub App PEM at `secrets/github-app.pem`:
+
+```powershell
+Copy-Item .env.example .env
+New-Item -ItemType Directory -Force secrets
+# Copy your GitHub App private-key PEM to secrets\github-app.pem.
+docker compose up --build
+```
+
+Compose starts PostgreSQL 16 with a named local volume, Redis 7, and a one-shot migration service. The migration command is `python -m alembic -c apps/api/alembic.ini upgrade head`; the API and worker start only after it succeeds. PostgreSQL uses trust authentication on the private Compose network and is not published to the host. The API binds to `127.0.0.1:8000` on the host. Check health at `http://127.0.0.1:8000/health`.
+
+The smoke script sends one signed pull-request webhook. In a separate PowerShell window, set `DOCDRIFT_GITHUB_WEBHOOK_SECRET` to the same local value in `.env`, then provide IDs and commit SHAs for a repository and pull request that exist in your test GitHub App installation:
+
+```powershell
+$env:DOCDRIFT_GITHUB_WEBHOOK_SECRET = "<same local value as in .env>"
+python .\scripts\smoke_webhook.py --api-url http://127.0.0.1:8000 --repo owner/name --pr 1 --head-sha <40-character-head-sha> --base-sha <40-character-base-sha> --installation-id 123 --repository-id 456
+```
+
+The script prints the HTTP status, response body, and elapsed time; it never prints the webhook secret. The workflow at [.github/workflows/ci.yml](.github/workflows/ci.yml) runs Python checks, the synthetic benchmark, a repository dogfood scan, and dashboard validation.
 
 ## Tests and quality checks
 

@@ -8,9 +8,9 @@ from typing import Any, Self, cast
 from unittest.mock import patch
 
 import httpx
+from cryptography.fernet import Fernet
 from cryptography.hazmat.primitives import serialization
 from cryptography.hazmat.primitives.asymmetric import rsa
-from cryptography.fernet import Fernet
 from docdrift_api.config import Settings
 from docdrift_api.dashboard import _csrf, _get_session
 from docdrift_api.github_installations import (
@@ -22,7 +22,6 @@ from docdrift_api.models import DashboardSession, Repository
 from docdrift_api.repository_sync import persist_repository_sync
 from fastapi.testclient import TestClient
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
-
 
 _TEST_PRIVATE_KEY = rsa.generate_private_key(public_exponent=65537, key_size=2048)
 _TEST_KEY = _TEST_PRIVATE_KEY.private_bytes(

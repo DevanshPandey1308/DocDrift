@@ -4,7 +4,6 @@ import unittest
 from unittest.mock import AsyncMock
 
 from arq.connections import RedisSettings
-
 from docdrift_api.queue import enqueue_run, redis_settings_from_url, run_job_id
 
 

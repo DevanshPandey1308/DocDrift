@@ -177,7 +177,7 @@ async def process_run(ctx: dict[str, Any], run_id: int) -> dict[str, str | int]:
             raise Retry(defer=delay) from None
         await _fail_after_error(session_factory, run_id, error)
         raise RunProcessingError("Run processing failed after bounded retries.") from None
-    except Exception as error:
+    except Exception as error:  # noqa: BLE001 - failure-containment boundary: persist failure and raise a sanitized worker error
         await _fail_after_error(session_factory, run_id, error)
         raise RunProcessingError("Run processing failed.") from None
 
@@ -248,7 +248,7 @@ async def _fail_after_error(
 ) -> None:
     try:
         await _mark_failed_if_active(session_factory, run_id)
-    except Exception as persistence_error:
+    except Exception as persistence_error:  # noqa: BLE001 - failure-containment boundary: log persistence failure without masking run failure
         logger.error(
             "run_failure_state_persistence_failed",
             extra={"run_id": run_id, "error_type": type(persistence_error).__name__},

@@ -13,6 +13,7 @@ dist/
 .env
 .env.*
 !.env.example
+secrets/
 .idea/
 .vscode/
 *.swp

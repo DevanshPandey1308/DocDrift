@@ -239,7 +239,7 @@ def create_webhook_router(settings: Settings) -> APIRouter:
 
         try:
             submitted = await enqueue_run(redis_pool, result.run_id)
-        except Exception as error:
+        except Exception as error:  # noqa: BLE001 - failure-containment boundary: return a safe retryable queue error without exposing the exception
             # Do not log exception text: Redis clients may include connection details.
             logger.error(
                 "run_queue_submission_failed",

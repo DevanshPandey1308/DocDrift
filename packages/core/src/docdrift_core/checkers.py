@@ -21,20 +21,20 @@ def _funcs(claim: Claim, index: CodeIndex) -> list[FunctionInfo]:
     return index.functions.get(claim.subject, [])
 
 
-_THIRD_PARTY_COMMAND = re.compile(r"\b(?:pytest|pip|docker|git|npm)\b", re.I)
+_THIRD_PARTY_COMMAND = re.compile(r"\b(?:pytest|pip|docker|git|npm)\b", re.IGNORECASE)
 _HISTORICAL_FRAMING = re.compile(
     r"\b(?:was|used\s+to|previously|formerly|deprecated)\b|"
     r"\bin\s+v\d+(?:\.\d+)*\b|->|→",
-    re.I,
+    re.IGNORECASE,
 )
 _NEGATED_FRAMING = re.compile(
     r"\b(?:not|never|no\s+longer|does\s+not|doesn't|do\s+not|don't|"
     r"is\s+not|isn't|are\s+not|aren't|cannot|can't|without)\b",
-    re.I,
+    re.IGNORECASE,
 )
 _FOREIGN_PACKAGE_FRAMING = re.compile(
     r"\b(?:another|different|other)\s+(?:project|package|module|library)\b",
-    re.I,
+    re.IGNORECASE,
 )
 _ABSENCE_FLAGS = {"--help", "-h", "--version", "-V"}
 _PATH_EXTENSIONS = {
@@ -134,10 +134,10 @@ def _historical_document(claim: Claim) -> bool:
 
 
 def _flag_own_cli_context(claim: Claim, index: CodeIndex) -> bool:
-    if re.search(r"\b(?:the|this)\s+CLI\b|\bcommand\s+line\b", claim.text, re.I):
+    if re.search(r"\b(?:the|this)\s+CLI\b|\bcommand\s+line\b", claim.text, re.IGNORECASE):
         return True
     names = index.project_script_names | index.parser_programs
-    return any(re.search(rf"(?<![\w.-]){re.escape(name)}(?![\w.-])", claim.text, re.I)
+    return any(re.search(rf"(?<![\w.-]){re.escape(name)}(?![\w.-])", claim.text, re.IGNORECASE)
                for name in names if name)
 
 
@@ -336,7 +336,7 @@ def check_route(claim: Claim, index: CodeIndex) -> Finding:
     expected_method = str(claim.expected.get("method", "")).upper()
     exact = [route for route in routes if route.method == expected_method and not route.dynamic]
     if exact:
-        route = sorted(exact, key=lambda item: (item.source_path, item.line))[0]
+        route = min(exact, key=lambda item: (item.source_path, item.line))
         evidence = index.evidence(route.source_path, route.line)
         ev = (evidence,) if evidence else ()
         return _finding(claim, Verdict.TRUE,
@@ -352,12 +352,12 @@ def check_route(claim: Claim, index: CodeIndex) -> Finding:
                         f"No statically indexed route declaration exists in scanned source scope {_source_scope_label(index)}.",
                         method="static_python_route")
     if not routes:
-        nearest = sorted(
+        nearest = min(
             indexed_routes,
             key=lambda item: (item.method != expected_method,
                               _edit_distance(item.path, claim.subject, max(len(item.path), len(claim.subject))),
                               item.source_path, item.line),
-        )[0]
+        )
         evidence = index.evidence(nearest.source_path, nearest.line)
         ev = (evidence,) if evidence else ()
         explanation = (

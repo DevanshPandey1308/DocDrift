@@ -16,12 +16,12 @@ import sys
 import time
 import tomllib
 from collections import Counter, defaultdict
+from collections.abc import Iterable
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Any, Iterable
+from typing import Any
 
 from docdrift_cli.main import main as cli_main
-
 
 SCHEMA_VERSION = 1
 GENERATOR_VERSION = 3
@@ -121,7 +121,6 @@ def _make_statements(case_number: int, rng: random.Random, timeout: int,
                      retries: int, flag: str, env_name: str, path: str,
                      version: str, route: str, mutation_count: int) -> list[StatementSpec]:
     other = timeout + 17
-    retry_subject = "retries"
     unsupported_index = case_number % len(UNSUPPORTED_TEMPLATES)
     paraphrase_index = (case_number // 2) % len(PARAPHRASE_TEMPLATES)
     decoy_index = (case_number // 3) % len(DECOY_TEMPLATES)
@@ -390,7 +389,7 @@ def _documented_number(text: str) -> int | None:
         return int(match.group(1).replace(",", ""))
     words = {"one": 1, "two": 2, "three": 3, "four": 4, "five": 5,
              "six": 6, "seven": 7, "eight": 8, "nine": 9, "ten": 10}
-    match = re.search(r"\b(one|two|three|four|five|six|seven|eight|nine|ten)\b", text, re.I)
+    match = re.search(r"\b(one|two|three|four|five|six|seven|eight|nine|ten)\b", text, re.IGNORECASE)
     return words[match.group(1).lower()] if match else None
 
 
@@ -421,16 +420,26 @@ def _independent_agreement(repo: Path, statement: dict[str, Any]) -> bool:
     if kind == "cli_flag":
         for tree in trees:
             for node in ast.walk(tree):
-                if isinstance(node, ast.Call) and isinstance(node.func, ast.Attribute) and node.func.attr == "add_argument":
-                    if any(isinstance(arg, ast.Constant) and arg.value == subject for arg in node.args):
-                        return True
+                if (
+                    isinstance(node, ast.Call)
+                    and isinstance(node.func, ast.Attribute)
+                    and node.func.attr == "add_argument"
+                    and any(isinstance(arg, ast.Constant) and arg.value == subject for arg in node.args)
+                ):
+                    return True
         return False
     if kind == "environment_variable":
         for tree in trees:
             for node in ast.walk(tree):
-                if isinstance(node, ast.Call) and isinstance(node.func, ast.Attribute) and node.func.attr in {"getenv", "get"}:
-                    if node.args and isinstance(node.args[0], ast.Constant) and node.args[0].value == subject:
-                        return True
+                if (
+                    isinstance(node, ast.Call)
+                    and isinstance(node.func, ast.Attribute)
+                    and node.func.attr in {"getenv", "get"}
+                    and node.args
+                    and isinstance(node.args[0], ast.Constant)
+                    and node.args[0].value == subject
+                ):
+                    return True
         return False
     if kind == "file_path":
         return (repo / subject).is_file()
@@ -723,7 +732,7 @@ def _table(title: str, groups: dict[str, dict[str, Any]]) -> list[str]:
     lines = [f"### {title}", "", "| Group | Statements | TP | FP | FN | Precision | Recall | F1 | Extracted | Abstain (correct) |",
              "|---|---:|---:|---:|---:|---:|---:|---:|---:|---:|"]
     for name, value in groups.items():
-        cell = lambda key: "null" if value[key] is None else str(value[key])
+        cell = lambda key, row=value: "null" if row[key] is None else str(row[key])
         lines.append(f"| {name} | {value['statements']} | {value['TP']} | {value['FP']} | {value['FN']} | "
                      f"{cell('precision')} | {cell('recall')} | {cell('F1')} | "
                      f"{cell('extraction_rate')} | {cell('abstain_rate_on_correct')} |")

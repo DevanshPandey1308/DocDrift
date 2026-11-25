@@ -1,0 +1,129 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+jobs:
+  python:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    services:
+      postgres:
+        image: postgres:16
+        env:
+          POSTGRES_USER: docdrift
+          POSTGRES_PASSWORD: docdrift
+          POSTGRES_DB: docdrift
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U docdrift -d docdrift"
+          --health-interval 5s
+          --health-timeout 3s
+          --health-retries 20
+      redis:
+        image: redis:7
+        ports:
+          - 6379:6379
+        options: >-
+          --health-cmd "redis-cli ping"
+          --health-interval 5s
+          --health-timeout 3s
+          --health-retries 20
+    env:
+      DOCDRIFT_DATABASE_URL: postgresql+asyncpg://docdrift:docdrift@localhost:5432/docdrift
+      DOCDRIFT_TEST_DATABASE_URL: postgresql+asyncpg://docdrift:docdrift@localhost:5432/docdrift
+      DOCDRIFT_REDIS_URL: redis://localhost:6379/0
+      DOCDRIFT_GITHUB_WEBHOOK_SECRET: ci-only-webhook-secret
+      PYTHONPATH: .:apps/api/src:packages/core/src:packages/cli/src:apps/mcp/src
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-python@v7
+        with:
+          python-version: "3.12"
+          cache: pip
+      - name: Install API and development dependencies
+        run: python -m pip install -e ".[api,dev]"
+      - name: Apply database migrations
+        run: python -m alembic -c apps/api/alembic.ini upgrade head
+      - name: Ruff
+        run: ruff check
+      - name: Mypy core and CLI
+        run: mypy packages/core/src packages/cli/src
+      - name: Python tests
+        run: pytest -q
+
+  benchmark:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    env:
+      PYTHONPATH: .:apps/api/src:packages/core/src:packages/cli/src:apps/mcp/src
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-python@v7
+        with:
+          python-version: "3.12"
+          cache: pip
+      - name: Install development dependencies
+        run: python -m pip install -e ".[dev]"
+      - name: Generate and run synthetic benchmark
+        run: |
+          python -m benchmark.harness generate --seed 1337 --repos 60
+          python -m benchmark.harness run --seed 1337 --repos 60 --out benchmark/results/ci
+      - name: Check benchmark baseline
+        run: python -m benchmark.harness check --baseline benchmark/baseline.json --tolerance 0.02 --out benchmark/results/ci
+      - name: Upload benchmark results
+        if: always()
+        uses: actions/upload-artifact@v7
+        with:
+          name: synthetic-benchmark-results
+          path: benchmark/results/ci/results.json
+          if-no-files-found: warn
+
+  dogfood:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    env:
+      PYTHONPATH: .:apps/api/src:packages/core/src:packages/cli/src:apps/mcp/src
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-python@v7
+        with:
+          python-version: "3.12"
+          cache: pip
+      - name: Install CLI and development dependencies
+        run: python -m pip install -e ".[dev]"
+      - name: Check repository documentation
+        run: python docdrift.py check --repo . --docs README.md --docs docs --source apps --source packages
+
+  dashboard:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-node@v7
+        with:
+          node-version: "22"
+          cache: npm
+          cache-dependency-path: apps/dashboard/package-lock.json
+      - name: Install dashboard dependencies
+        working-directory: apps/dashboard
+        run: npm ci
+      - name: Lint dashboard
+        working-directory: apps/dashboard
+        run: npm run lint
+      - name: Typecheck dashboard
+        working-directory: apps/dashboard
+        run: npm run typecheck
+      - name: Test dashboard
+        working-directory: apps/dashboard
+        run: npm test -- --reporter=dot

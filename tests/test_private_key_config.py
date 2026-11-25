@@ -7,7 +7,6 @@ from unittest.mock import patch
 
 from cryptography.hazmat.primitives import serialization
 from cryptography.hazmat.primitives.asymmetric import rsa
-
 from docdrift_api.config import Settings
 from docdrift_api.github_installations import (
     GitHubInstallationClient,
@@ -94,12 +93,11 @@ class GitHubAppPrivateKeyConfigTests(unittest.TestCase):
             "os.environ",
             {"DOCDRIFT_GITHUB_APP_PRIVATE_KEY_PATH": "missing-private-key-file.pem"},
             clear=True,
-        ):
-            with self.assertRaisesRegex(
-                ValueError,
-                "DOCDRIFT_GITHUB_APP_PRIVATE_KEY_PATH could not be read as UTF-8",
-            ) as raised:
-                Settings.from_env()
+        ), self.assertRaisesRegex(
+            ValueError,
+            "DOCDRIFT_GITHUB_APP_PRIVATE_KEY_PATH could not be read as UTF-8",
+        ) as raised:
+            Settings.from_env()
         self.assertFalse(self._pem in str(raised.exception))
 
     def test_garbage_key_has_safe_format_diagnostic_and_no_key_text(self) -> None:
